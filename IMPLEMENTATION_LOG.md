@@ -1,0 +1,145 @@
+# MANJI FOOD implementation log
+
+Date: 2026-10-30, Asia/Jakarta. Environment: Windows / PowerShell / Node 24.15.0 / npm 12.0.2. Implementation performed in this existing kit directory.
+
+## Audit and reading
+
+Read START_HERE.md, AGENTS.md and every entry in docs/READING_ORDER.md: master prompt, three design specifications/tokens, complete static preview, architecture, database notes and complete starter SQL, payments/orders, security, notifications, test plan, acceptance and example environment. Root and parent contained only the specification kit: no application, dependencies, routes, Git repository or connected database. Scaffolding one Next.js app in this root was necessary. No second app, vendor scope, delivery/kiosk or payment gateway was introduced. Original specifications and starter SQL preserved. SHA-256 of database/001_initial_schema.sql matches supabase/migrations/001_initial_schema.sql.
+
+Plan followed: auth → catalog → cart → atomic checkout → queue/tickets → manual payments → realtime → notifications → operations → QA. No hosted migrations or deployment performed without project configuration.
+
+## Implemented vertical slices
+
+- Auth: Supabase SSR cookies and session-refresh proxy, verified server identity, registration with metadata role ignored, admin login landing on operational board, email recovery and PKCE/token-hash callback, password reset/logout, remembered email only by opt-in. Server page whitelist and admin guard. Honest setup screen while unconfigured.
+- Catalog/cart: database categories/products/variants, search/filter, availability, sold-out/image fallback, detail and quantity controls. Per-user persistent carts through bounded RPCs. Reorder is one transaction at current prices; historical snapshots remain unchanged.
+- Checkout: user-level serialization, deterministic product/variant locks, locked capacity/cutoff, active category/menu/variant revalidation, stock aggregated across variant lines, server-only final totals. Atomic order/items/payment/reservations/ticket/events/notifications/outbox. User-scoped idempotency returns the original order after cart clear or store closure.
+- Tickets/history: permanent readable order number/UUID, owner-only 10-character pickup code with a separate hash, distinct order/payment states, Indonesian action timeline, retained access to historical/inactive pickup slots, history groups and pagination.
+- Admin queue: server counts and stage filtering, pagination, one primary next action, acknowledgment independent of payment, unacknowledged reminder feed independent of selected queue stage.
+- Payments: original configured static QRIS rendered unchanged, exact server total and copy action, optional private proof, student payment claim. Admin manual ledger verification with unique reference and audit; cash collection; completion requires paid status and matching code. Sequential transitions; retry-safe verification/completion/restock. Manual audited refund and late-payment reconciliation; no simulated settlement.
+- Realtime/inbox: transactional per-recipient notifications/outbox, recipient-filtered RLS subscriptions that refetch canonical state, 20-second polling and reconnect/tab refresh. Original opt-in three-note audio, batching/repeat, mute/quiet, volume, snooze and acknowledgment. No autoplay or closed-browser guarantees.
+- Web Push: standard service worker, subscribe/unsubscribe/preferences, generic lock-screen text, separate service-role/VAPID worker with job locks, endpoint cleanup and retry/backoff. Actual delivery/device behavior remains unverified.
+- Operations: product/photo/stock/availability/variant and category editors, pickup sessions/capacity/cutoff, store open/pause/location/hours/QRIS settings, daily report selection and complete paginated CSV with formula neutralization.
+- UI/PWA: Indonesian Quicksand/Fredoka through next/font/google, Lucide icons, solid restrained rose/editorial palette, student bottom nav and admin desktop/mobile nav, focus/safe-area/reduced-motion/loading/error/empty/retry states. Replaceable local SVG/PNG identity, manifest and service worker; no caching of authenticated HTML/API/proofs.
+
+## Changed files
+
+- Foundation: package.json, package-lock.json, .gitignore, .env.example, tsconfig.json, next-env.d.ts, next.config.ts, postcss.config.mjs, tailwind.config.ts, eslint.config.mjs, vitest.config.ts, playwright.config.ts.
+- Routes/HTTP: src/app/layout.tsx, globals.css, [[...path]]/page.tsx, loading.tsx, error.tsx, not-found.tsx, auth/callback/route.ts, api/{auth,command,data,upload,reports}/route.ts; src/proxy.ts.
+- UI: src/components/{app,auth-form,student-screens,admin-screens,notifications,reload}.tsx.
+- Boundaries: src/lib/{domain,security,uploads}.ts, supabase/{server,browser}.ts.
+- Database: supabase/migrations/001_initial_schema.sql (unchanged starter copy), 002_operations.sql (additive operational completion). No live schema overwritten. Test TRUNCATE statements run only inside ephemeral PGlite fixtures.
+- Assets: public/manifest.webmanifest, sw.js, icons/{icon.svg,icon-192.png,icon-512.png,apple-touch-icon.png}.
+- Worker/QA: scripts/{dispatch-push,smoke,serve-ui-harness}.mjs, build-ui-harness.cjs, ui-typescript-loader.cjs; tests/{domain,database,api}.test.ts, ui.spec.ts and tests/ui/* isolated fixtures/adapters.
+- Handoff: README.md, docs/RELEASE_CHECKLIST.md, this log. No real QRIS or credentials added to application code. Generated caches/artifacts ignored under .next/.local/test-results; local env files ignored.
+
+## Checks executed and actual results
+
+1. Dependencies: registry is offline. Initial ENOTCACHED/ETARGET from cached metadata resolved using available compatible cached versions and a workspace-local cache. `npm ci --offline --ignore-scripts --no-audit --no-fund --cache .local/npm-cache` succeeded, 477 packages. Versions locked. No online advisory audit claimed. Cached ESLint version printed a support-status warning.
+2. Test runner: initial Vite/esbuild/Windows realpath child processes hit EPERM. Native config loader, TypeScript in-process transform, preserved symlinks and one thread allow the suite to execute; no invariant test was disabled for a pass.
+3. Final complete test run, 11:12 WIB: `npm test` **55 passed / 3 files**, exit 0, 7.79 seconds, without extra Node flags. This repeated the earlier 55-pass run after tightening cutoff validation to use wall-clock time after lock acquisition. Includes 29 real SQL migration/RLS tests, 14 domain tests and 12 mocked-transport HTTP/auth-boundary tests. Covers NULL bypasses, QR mandatory fields/CRC, role escalation, student isolation, private proofs, snapshots, rollback, retry, aggregate stock, capacity/cutoff, manual/duplicate settlement, cash/code completion, cancellation/restock, refund bookkeeping, reorder, queue counts, historical slots, opt-out, origin and rate controls. PGlite serializes connections; this does not prove hosted multi-connection locking.
+4. `npm run lint` **passed, exit 0, no warnings**; `npm run typecheck` **passed, exit 0**. Full final build also ran its TypeScript check successfully.
+5. Final `npm run build` **passed, exit 0**, Next 16.3.8 / webpack / cpus=1: compilation, TypeScript, data collection, 7/7 static-page generation, optimization and build traces. Routes: /[[...path]], /api/auth, /api/command, /api/data, /api/reports, /api/upload, /auth/callback plus not-found and proxy. Earlier resource/spawn failures were not counted as passes.
+6. UI harness compiled from real app components. `npm run test:e2e` discovered 12 scenarios but worker creation failed EPERM: **zero browser scenarios verified**. Chrome QA launch was rejected by automatic approval review because sandbox approval is disabled. No responsive/browser/device/audio/push passes or screenshots claimed. Suite targets 22 screens at 320/360/375/390/430/768/1024/1440px plus interactions.
+7. Final `node scripts/smoke.mjs` **passed 17 production HTTP checks, exit 0**: real compiled setup pages, private/no-store headers, unknown-route not-found content and noindex, manifest/icons/service worker, unconfigured data API 503 and cross-origin mutation rejection 403. The first smoke assertion expected an unconditional 404; Next's streamed not-found page returned 200, so the check now requires actual not-found content plus noindex and permits either documented streamed/non-streamed status. An intervening npm wrapper attempt could not start; only the successful direct script result is counted. Hosted flows were not exercised.
+8. Final `npm run test:ui:build` **passed, exit 0**, compiling the isolated UI harness against the final components and actual built Quicksand/Fredoka CSS. This is compilation evidence only; browser execution remains blocked. Final `npm run lint` repeated after QA-script refinements **passed without warnings, exit 0**.
+
+Environment: Windows available commit fell to approximately 79 MiB during QA despite free physical memory, causing native/V8 OOM, thread-start failures and PGlite allocation failure. A temporary smaller PGlite memory trial was stopped and reverted. After recovery all 55 tests passed using normal engine memory. Sequential checks and the normal build command completed. No TypeScript errors were ignored and no tests skipped to obtain the final results.
+
+## Release blockers and operational boundaries
+
+- Supply real Supabase URL/public key and exact application origin; review/apply 001 then 002, bootstrap real admin, configure SMTP/Auth redirects and test actual registration/login/recovery/logout/RLS/Storage/Realtime. Web app needs no service-role key.
+- Supply original merchant QRIS, actual menu photos/brand assets, scan/cross-check merchant identity and verify real incoming settlement. No physical payment/refund/pickup tested.
+- Supply VAPID keys and trusted scheduled push worker with server-only service-role key. Validate permission, opt-out, retries and iOS/Android behavior. Web Push is best effort.
+- Run browser QA on a host permitting processes, then staging E2E, real concurrent Postgres connections, 200% zoom/keyboard/screen reader/safe-area widths, actual audio/PWA/device checks.
+- Configure Vercel, HTTPS and production redirects; validate a deployed release. No deployment performed.
+- Security follow-up: inspection of the local npm configuration inadvertently emitted an npm token in tool output. Its value was not copied into app code or this log. The operator should revoke/regenerate that token.
+- No automatic order expiry/refund: review unpaid reservations before preparation and reconcile actual funds before cancellation. Inbox shows latest 100 messages. Uploads limited to 4 MiB for Vercel multipart compatibility. Queue/history are paginated; daily CSV fetches all pages.
+
+README.md contains setup, exact admin bootstrap, QRIS/payment procedures, push scheduler, validation, deployment and troubleshooting. docs/RELEASE_CHECKLIST.md lists hosted/device sign-off. Original examples/ACCEPTANCE.md remains unmarked: local implementation/tests alone do not establish live acceptance.
+
+## 2026-10-30 follow-up: CSP and credential URL repair
+
+### Audit and short plan
+
+Read the required entrypoint, reading order, master/design specifications, architecture, payment/security/test documents, acceptance matrix and existing implementation log. Inspected the current App Router routes, the sole `src/proxy.ts`, installed Next 16.3.8 / Supabase SSR dependencies, starter schema and both existing migrations before changes. No schema or hosted data changes were needed. This directory still has no Git repository, so Git diff checks are unavailable.
+
+Plan: (1) identify every CSP owner and actual worker use; (2) fix development/production policy boundaries and nonce propagation; (3) make authentication safe before hydration and clean legacy URLs; (4) verify route, cookie and role behavior, lint/typecheck/build; (5) record evidence and limits.
+
+Audit found one static CSP in `next.config.ts`, no alternative middleware, no CSP meta tag in the application, and no separate deployment header configuration in this repository. The old policy allowed all inline scripts, omitted development eval, and allowed only same-origin workers. The login form already used JSON POST after hydration but omitted native `method` and `action`; blocked hydration therefore allowed the browser's default GET submission to put named email/password inputs into the URL. The app registers `/sw.js`. Supabase's optional blob heartbeat worker defaults to off and is not enabled in this app; installed webpack Fast Refresh code does not require a blob worker. Existing `.env` contains public configuration; values were not printed or sent to a hosted provider during verification.
+
+### Changes and completed items
+
+- `next.config.ts`: removed the static CSP so a second policy cannot conflict with per-request nonces. Retained other security headers and tightened Referrer-Policy to `no-referrer`.
+- `src/lib/csp.ts` (new), `src/proxy.ts`: one CSP builder and one response owner; fresh random nonce forwarded into the rendering request and response; incoming nonce/CSP overwritten. Production scripts require nonce/strict-dynamic, forbid inline event handlers and eval; only development adds eval and its exact HMR WebSocket origin. Backend HTTP/WebSocket origins are explicit. Objects/frames/framing blocked, forms same-origin. Inline styles remain allowed for React/Next-generated loading styles. Workers remain same-origin only; no blob script/worker allowance was added.
+- Proxy matches all paths so assets and asset-prefix not-found HTML also receive CSP. Asset requests retain framework cache behavior and skip auth refresh. Authenticated HTML/API responses and credential redirects remain private/no-store. Refreshed cookie forwarding preserves the original nonce/policy.
+- `src/app/layout.tsx`: dynamic rendering for all HTML, including not-found pages, so hydration scripts always receive the current request nonce.
+- `src/lib/auth-url.ts` (new): case-insensitive removal of repeated email/password and related password-field query parameters. Proxy redirects legacy URLs before auth/rendering; `src/components/auth-form.tsx` also replaces any remaining credential URL in browser history. PKCE/recovery `code`, `token_hash`, `next` and fixed status parameters remain intact. This cannot erase previously recorded browser/proxy/server history.
+- `src/components/auth-form.tsx`: explicit native POST to `/api/auth` and allowlisted action field for login/register/recovery/reset, while retaining hydrated JSON POST and optional email-only remembering. No password persistence added.
+- `src/app/api/auth/route.ts`: bounded URL-encoded native POST support through the same schema, origin check, throttle and Supabase SSR flow as JSON. Native forms use POST/303/GET; destinations contain only safe routes/fixed status codes. Login failures do not echo fields or provider details. Student/admin landing destinations and session cookie/logout behavior retained.
+- `tests/csp.test.ts`, `tests/proxy.test.ts` (new), `tests/api.test.ts`: policy modes, exact origins, nonce uniqueness/forwarding, refreshed-cookie propagation, assets/cache, URL cleanup/recovery preservation, JSON/native login role destinations, failure/oversize/origin rejection and native account actions.
+- `vitest.config.ts`: in-process TypeScript transform leaves NODE_ENV readable at test runtime, avoiding Vite's esbuild subprocess and allowing real development/production branch tests. Production compilation is unchanged.
+- `scripts/verify-auth-csp.mjs` (new), `package.json`: `npm run test:security` starts the actual production Next server and exercises the actual Supabase SSR SDK with an isolated provider fetch fixture. Outgoing provider traffic is intercepted and unexpected network destinations are rejected. It validates rendered forms, script/header nonce agreement, no duplicate policy, clean redirects, static/error coverage, origin rejection, both login transports and roles, session access to protected pages and logout cookie deletion. Failures return exit 1 with bounded diagnostics. No real credentials or hosted authentication are used.
+- `README.md`, `docs/SECURITY.md`, this log: policy ownership, native submission behavior, verification command and deployment/browser limitations documented. No dependencies or migrations changed.
+
+### Checks executed on the final change
+
+- `npm run lint`: passed, exit 0, no warnings.
+- `npm run typecheck`: passed, exit 0.
+- Full unit/integration suite: **74 tests passed across 5 files**, exit 0, 7.17 seconds. Includes all 29 existing SQL/RLS tests plus authentication, proxy, CSP and domain coverage. Executed with:
+
+  ```powershell
+  node --max-old-space-size=768 --max-semi-space-size=4 --v8-pool-size=1 --single-threaded-gc --no-concurrent-recompilation --no-wasm-tier-up node_modules/vitest/vitest.mjs run --configLoader native
+  ```
+
+  Initial ordinary runs hit native V8 `Fatal process out of memory: Zone`; restricting background compilation and disabling WASM tier-up allowed the complete unchanged database suite and final full suite to pass. A preliminary 44-test subset and an isolated 29-test database run also passed. No assertions were disabled and no tests skipped in the final full run.
+- Final `npm run build`: **passed, exit 0**. Webpack compilation, TypeScript, page-data collection, 6/6 generation, optimization and traces completed. All HTML routes, including `_not-found`, are dynamically rendered. One intervening rebuild failed at worker startup with `spawn EPERM`; the final retry completed normally without changing build security or disabling type checks.
+- Final `npm run test:security`: **16 production HTTP scenarios passed, exit 0**, against the final compiled code. All auth page/not-found script nonces matched their actual CSP headers; production denied eval/blob workers; native forms were POST; JSON and URL-encoded student/admin login produced cookies and allowed access to the protected landing page; logout removed session cookies; invalid login and foreign-origin rejection behaved correctly. These are real Next/SSR SDK tests with a provider fixture, not hosted Supabase evidence.
+- Attempted direct headless Chrome through Playwright: **blocked by sandbox `spawn EPERM`**. No browser JavaScript execution, Fast Refresh browser session, console-clear result, or real device pass is claimed. No privilege escalation requested or CSP bypass used.
+
+### Remaining verification boundaries
+
+Run the browser against `npm run dev` and the production server on a host permitting Chrome processes, checking actual console messages, Fast Refresh, session navigation and `/sw.js`. Verify a real staging student/admin account, recovery and logout with hosted Supabase; local fixtures do not prove hosted configuration, email delivery or RLS deployment. Inspect deployed response headers because hosting/reverse proxies outside this directory may still add an obsolete CSP. Never solve a conflicting deployed policy by adding production eval or disabling CSP. Passwords previously exposed in URLs require account-side rotation and existing logs/history must be handled separately; the code fix prevents new GET submissions and cleans incoming legacy URLs.
+
+## 2026-10-30 follow-up: server-synchronized WIB clock
+
+### Audit and plan
+
+Reopened AGENTS.md and this log; reused the required specification reading already completed in this conversation. Audited all current timestamp formatting, timers, app routes, dependencies and both migrations before edits. Existing timestamps mostly displayed minutes; admin data-update/snooze times used the device clock/timezone; catalog/checkout called `availableSlot()` against device `Date.now()` and only rechecked on data render; admin datetime-local fields converted through the device timezone. PostgreSQL checkout already uses `clock_timestamp()` after locking the pickup slot, so that final boundary needed no migration or change.
+
+Plan: implement one reusable, hydration-safe server clock; apply WIB formatting, duration and live pickup validation; correct admin input timezone; test drift, lifecycle/network and cutoff boundaries; run lint/typecheck/full tests/build and retain the existing UI/business flows.
+
+### Files and behavior changed
+
+- New `src/app/api/time/route.ts`: precise millisecond server epoch, dynamic/no-store JSON, no database/auth dependency. `src/proxy.ts` preserves CSP and private/no-store headers while skipping unnecessary session refresh for this public endpoint. No service-role key or credentials involved.
+- New `src/lib/server-clock.ts`: one external store per tab with a monotonic server anchor, half-RTT transit estimate, second-boundary timeout scheduling and cached immutable snapshots. Elapsed time is recomputed, never incremented per callback. Samples refresh every five visible minutes; visibility/focus/pageshow/reconnect trigger deduplicated synchronization with a five-second minimum gap. Requests time out after eight seconds and failures back off from 30 seconds to five minutes. Hidden/no-subscriber timers stop. A pending bounded request is shared across Strict Mode remounts. Device-clock/monotonic discontinuity detection handles system sleep and clock changes without adopting device time.
+- New `src/hooks/use-server-clock.ts`: `useServerClock()` exposes display snapshot and precise imperative `getNow()`; all consumers share timer/request/listener ownership. `useWibToday()` only updates the report at WIB date changes. The constant server snapshot also serves initial client hydration; unavailable time renders an explicit placeholder rather than a fabricated device-based clock. Browser listeners are removed on final unsubscribe.
+- New `src/lib/time.ts`: cached Asia/Jakarta formatters for `HH:mm:ss`, WIB calendar dates and admin datetime-local values; strict WIB-to-UTC conversion including seconds and date normalization checks; duration formatting that never wraps after 24 hours or becomes negative. Unchanged stored timestamps retain their full precision during capacity edits.
+- New `src/components/clock.tsx`: small header clock and session-duration/start/finish countdown components. Initial `--:--:-- WIB` markup is deterministic; timers do not announce every second to screen readers. The root App/catalog/board do not need to re-render for header ticks.
+- `src/components/app.tsx`: student/admin header clock within the existing header, server-based last-data-sync label; existing navigation, polling, realtime and operations retained.
+- `src/components/student-screens.tsx`: isolated live pickup summary; checkout filters sessions every second, disables expired selection and warns without refresh, and reads exact current server-derived time again before submitting, including fractional-second cutoff checks. Session durations/countdowns shown in catalog, selected checkout and pickup tickets. Price/stock/capacity/order/payment mutations remain server-authoritative.
+- `src/components/admin-screens.tsx`: session schedule/input always WIB regardless of device zone, seconds-enabled inputs, explicit ordering validation/errors and unchanged-timestamp preservation for reserved sessions. Live duration/remaining-session text added to existing session panels. Report default date follows synchronized WIB and preserves an explicitly selected date.
+- `src/components/notifications.tsx`: uses the shared timestamp for reminder intervals/snooze instead of a second independent one-second timer/device clock; snooze display uses WIB. Gesture-based audio permission, mute/quiet settings and batching behavior retained.
+- `src/lib/domain.ts`: timestamp displays include `HH:mm:ss WIB`; `availableSlot` requires an explicit valid current instant, fails closed without it, and checks cutoff/end/capacity/active flag.
+- `src/app/globals.css`: only small tabular-number clock/session text styles and wrapping protection; existing visual direction, controls and layout retained.
+- New `tests/clock.test.ts`; extended `tests/domain.test.ts`, `tests/proxy.test.ts`, `tests/ui.spec.ts` and `scripts/verify-auth-csp.mjs`. `scripts/serve-ui-harness.mjs` serves the real-time fixture endpoint for the existing isolated UI harness.
+- New `docs/TIMEKEEPING.md`, plus `README.md` and this log: hook/API contract, scheduling/network behavior, validation authority, tests and operational limits. No packages, schemas, migrations or payment/auth state rules changed.
+
+### Actual verification and fixes
+
+- Final `npm run lint`: **passed, exit 0, no warnings**.
+- Final `npm run typecheck`: **passed, exit 0**. A test mock initially inferred an empty argument tuple; corrected its AbortSignal function signature and reran successfully. No application type errors were ignored.
+- Final complete unit/integration suite: **104 passed / 6 files**, exit 0, 8.60 seconds. Includes 29 clock-specific cases, the additional public-time proxy boundary, and all existing auth/CSP/domain/SQL/RLS cases. Command:
+
+  ```powershell
+  node --max-old-space-size=768 --max-semi-space-size=4 --v8-pool-size=1 --single-threaded-gc --no-concurrent-recompilation --no-wasm-tier-up node_modules/vitest/vitest.mjs run --configLoader native
+  ```
+
+  Covers wrong device time, exact seconds/midnight across timezones, one shared timer, RTT compensation, late callbacks without drift, Strict Mode request sharing, fresh remounts, five-minute sync, hidden tabs, sleep where performance.now pauses, clock jumps, offline/reconnect, bounded malformed/failed requests/backoff, real runtime event listener wiring/cleanup, cookie-free fetch, precise cutoff, duration and input date validation, timestamp precision preservation, and deterministic SSR placeholders. A rapid reconnect inside the debounce window was found during review: now it schedules a new sample at the cooldown boundary instead of waiting five minutes; regression test passes.
+- Final `npm run build`: **passed, exit 0**, normal webpack build: compilation, TypeScript, data collection, 6/6 generation, optimization and traces. Includes `/api/time`; CSP/auth protections preserved. Build repeated after the reconnect correction and completed successfully.
+- Final `npm run test:security`: **17 production HTTP scenarios passed, exit 0**, using the final compiled Next server. Added checks for precise uncached time with zero Supabase calls, and actual student/admin SSR clock placeholders; all previous CSP/auth/role-cookie/logout scenarios still pass. Provider remains an isolated fixture; no hosted auth/database traffic or deployment claimed.
+- Final `npm run test:ui:build`: **passed, exit 0**, actual current application components compile in the existing UI harness with current production CSS/fonts. This is compilation evidence, not responsive browser evidence.
+- Started the harness on 127.0.0.1:3120 and attempted `npm run test:e2e -- --grep "server-synchronized WIB clock"`: three new scenarios discovered, but Playwright worker startup failed **`spawn EPERM`**, exit 1, before browser execution. Harness stopped afterward. Added scenarios cover student/admin ticking without per-second requests, selected-slot expiry without refresh and WIB inputs/precision in a US-timezone browser. **No browser scenarios passed or skipped for a claimed pass.**
+
+### Remaining verification boundaries
+
+Run the new Playwright scenarios and existing responsive suite on a host that permits browser processes, then verify hydration, reconnect, sleep/wake and clocks on actual supported browsers/devices. Local SSR/fake-time/event tests do not prove physical-device behavior. Maintain synchronized application-host and PostgreSQL clocks (NTP/system clock service); precision also depends on asymmetric network delay. The app estimates from server time and does not claim an independent atomic/NTP reference. Hosted Supabase, device/audio/push and deployment acceptance remain separate from these local passes. Existing SQL cutoff revalidation after the slot lock remains the final authority.

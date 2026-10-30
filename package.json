@@ -1,0 +1,56 @@
+{
+  "name": "manji-food",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint src tests scripts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --configLoader native",
+    "test:e2e": "playwright test",
+    "push:dispatch": "node --env-file-if-exists=.env.local scripts/dispatch-push.mjs",
+    "test:ui:build": "node scripts/build-ui-harness.cjs",
+    "test:ui:serve": "node scripts/serve-ui-harness.mjs",
+    "test:smoke": "node scripts/smoke.mjs",
+    "test:security": "node scripts/verify-auth-csp.mjs"
+  },
+  "dependencies": {
+    "next": "16.3.8",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.117.2",
+    "tailwindcss": "3.4.19",
+    "lucide-react": "0.577.0",
+    "zod": "4.3.6",
+    "react-hook-form": "7.85.0",
+    "qrcode": "1.5.4",
+    "web-push": "3.6.7"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/qrcode": "1.5.6",
+    "@types/web-push": "^3.6.4",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.5",
+    "postcss": "^8.5.0",
+    "autoprefixer": "^10.4.0",
+    "vitest": "4.1.11",
+    "@electric-sql/pglite": "0.5.8",
+    "@playwright/test": "^1.56.0"
+  },
+  "overrides": {
+    "typescript-eslint": "8.70.0",
+    "@typescript-eslint/eslint-plugin": "8.70.0",
+    "@typescript-eslint/parser": "8.70.0"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "type": "module"
+}

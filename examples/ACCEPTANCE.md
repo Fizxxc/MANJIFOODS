@@ -1,0 +1,22 @@
+# Acceptance checklist
+
+- [ ] User registration, login, reset and secure logout actually work.
+- [ ] Roles enforced on server and in RLS; no self-select admin.
+- [ ] Menu content served from Supabase; no fake production data.
+- [ ] Price and inventory verified on server during checkout.
+- [ ] Order, items, payment and reserved stock inserted atomically.
+- [ ] Idempotent retry returns original order, no duplicate charge/order.
+- [ ] Pickup slot capacity and cutoff enforced.
+- [ ] QRIS static payload configured by admin and shown unchanged.
+- [ ] Students see exact amount; payment NEVER auto-settled from image.
+- [ ] Admin manual payment verification checks real incoming merchant settlement.
+- [ ] Cash recorded by admin and required before completion.
+- [ ] Queue updates, state transitions and notifications persist.
+- [ ] Student order ticket survives refresh and appears in history.
+- [ ] Admin sound opt-in, mute, snooze and batching.
+- [ ] Web Push gracefully handles unsupported/unsubscribed devices.
+- [ ] Private payment proofs are not public.
+- [ ] App responsive/mobile-first with Quicksand, Fredoka, Lucide only.
+- [ ] Developer contact in About/Profile.
+- [ ] Automated tests, typecheck, lint and production build pass.
+- [ ] Deployment + environment + admin setup documented.
