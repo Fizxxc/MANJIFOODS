@@ -55,14 +55,11 @@ export function lineTotal(base: number, delta: number, qty: number) {
     throw new Error("Jumlah tidak valid.");
   return unitPrice(base, delta) * qty;
 }
-export function availableSlot(s: Slot, now: number | null) {
+export function openSession(session: Session) {
   return (
-    now !== null &&
-    Number.isFinite(now) &&
-    s.active &&
-    new Date(s.cutoff_at).getTime() > now &&
-    new Date(s.ends_at).getTime() > now &&
-    s.reserved_count < s.capacity
+    session.session_mode === "manual" &&
+    session.active &&
+    session.ends_at === null
   );
 }
 export function allowedTransition(from: string, to: string) {
@@ -139,21 +136,8 @@ const variantData = z.object({
   price_delta_idr: z.number().int().min(-10000000).max(10000000),
   active: z.boolean(),
 });
-const slotData = z
-  .object({
-    title: short,
-    starts_at: z.iso.datetime({ offset: true }),
-    ends_at: z.iso.datetime({ offset: true }),
-    cutoff_at: z.iso.datetime({ offset: true }),
-    capacity: z.number().int().min(1).max(10000),
-    active: z.boolean(),
-  })
-  .refine(
-    (s) =>
-      Date.parse(s.cutoff_at) <= Date.parse(s.starts_at) &&
-      Date.parse(s.starts_at) < Date.parse(s.ends_at),
-    "Urutan waktu sesi tidak valid.",
-  );
+export const pickupTimeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+export const pickupPreviewSchema = z.object({ time: pickupTimeSchema });
 const categoryData = z.object({
   name: short,
   sort_order: z.number().int().min(0).max(1000),
@@ -170,7 +154,9 @@ export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("reorder"), order: uuid }),
   z.object({
     type: z.literal("checkout"),
-    slot: uuid,
+    session: uuid,
+    pickup_time: pickupTimeSchema,
+    expected_pickup_at: z.iso.datetime({ offset: true }),
     method: z.enum(["cash", "qris_static"]),
     key: uuid,
     note: z.string().max(300),
@@ -217,7 +203,8 @@ export const commandSchema = z.discriminatedUnion("type", [
     id: uuid.nullable(),
     data: variantData,
   }),
-  z.object({ type: z.literal("slot"), id: uuid.nullable(), data: slotData }),
+  z.object({ type: z.literal("session_start"), key: uuid }),
+  z.object({ type: z.literal("session_end"), session: uuid }),
   z.object({
     type: z.literal("store"),
     open: z.boolean(),
@@ -271,13 +258,12 @@ export type Variant = {
   price_delta_idr: number;
   active: boolean;
 };
-export type Slot = {
+export type Session = {
   id: string;
   title: string;
   starts_at: string;
-  ends_at: string;
-  cutoff_at: string;
-  capacity: number;
+  ends_at: string | null;
+  session_mode: "manual" | "scheduled";
   reserved_count: number;
   active: boolean;
 };
@@ -311,6 +297,7 @@ export type Order = {
   order_number: string;
   student_id: string;
   pickup_slot_id: string;
+  pickup_at: string | null;
   status: string;
   payment_method: string;
   total_idr: number;
@@ -354,7 +341,7 @@ export type Data = {
   categories: Category[];
   products: Product[];
   variants: Variant[];
-  slots: Slot[];
+  sessions: Session[];
   cart: CartItem[];
   orders: Order[];
   tickets: { order_id: string; code: string }[];
@@ -363,6 +350,11 @@ export type Data = {
   proofs: Proof[];
   settings: Store;
   orderCount: number;
+};
+export type PickupPreview = {
+  session_id: string;
+  pickup_at: string;
+  server_now: string;
 };
 export function csvCell(value: unknown) {
   let s = String(value ?? "");

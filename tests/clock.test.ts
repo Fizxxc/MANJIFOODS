@@ -7,32 +7,26 @@ import {
   CLOCK_SYNC_INTERVAL,
   type ClockEvent,
 } from "../src/lib/server-clock";
+import { formatDuration, formatWibTime, wibDate } from "../src/lib/time";
 import {
-  formatDuration,
-  formatWibTime,
-  parseWibDateTime,
-  wibDate,
-  wibDateTimeInput,
-} from "../src/lib/time";
-import {
-  availableSlot,
+  openSession,
+  pickupTimeSchema,
   commandSchema,
   dateTime,
-  type Slot,
+  type Session,
 } from "../src/lib/domain";
 import { WibClock, SessionTiming } from "../src/components/clock";
 import { GET as timeEndpoint } from "../src/app/api/time/route";
 import { serverClock } from "../src/hooks/use-server-clock";
 
 const epoch = Date.parse("2026-10-30T02:30:00Z");
-const slot: Slot = {
+const slot: Session = {
   id: "55555555-5555-4555-8555-555555555555",
   title: "Istirahat",
   starts_at: "2026-10-30T02:30:10Z",
-  ends_at: "2026-10-30T02:50:10Z",
-  cutoff_at: "2026-10-30T02:30:05.500Z",
+  ends_at: null,
+  session_mode: "manual",
   active: true,
-  capacity: 30,
   reserved_count: 1,
 };
 function harness() {
@@ -204,7 +198,7 @@ describe("shared monotonic server clock", () => {
     h.serverAdvance(3600000);
     h.setVisible(true);
     expect(h.clock.getNow()).toBeNull();
-    expect(availableSlot(slot, h.clock.getNow())).toBe(false);
+
     await flush();
     expect(h.clock.getNow()).toBe(epoch + 3600000);
   });
@@ -304,15 +298,14 @@ describe("shared monotonic server clock", () => {
     expect(h.clock.getNow()).toBeNull();
   });
 
-  it("validates a selected pickup slot at the actual instant, including subsecond cutoff", async () => {
+  it("an active session remains open as the clock passes midnight and 24 hours", async () => {
     const h = harness();
     h.clock.subscribe(() => {});
     await flush();
-    await vi.advanceTimersByTimeAsync(5499);
-    expect(availableSlot(slot, h.clock.getNow())).toBe(true);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(h.clock.getSnapshot().now).toBe(epoch + 5000);
-    expect(availableSlot(slot, h.clock.getNow())).toBe(false);
+    h.stall(26 * 3600000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.clock.getNow()).toBe(epoch + 26 * 3600000 + 1000);
+    expect(openSession(slot)).toBe(true);
   });
 });
 
@@ -378,33 +371,26 @@ describe("WIB formatting, session duration and hydration boundaries", () => {
       expect(dateTime("2026-10-30T17:00:00Z")).toContain("00:00:00 WIB");
     }
   });
-  it("treats admin input as WIB and preserves seconds and unchanged stored precision", () => {
-    vi.stubEnv("TZ", "Pacific/Honolulu");
-    expect(wibDateTimeInput(slot.starts_at)).toBe("2026-10-30T09:30:10");
-    expect(parseWibDateTime("2026-10-30T09:30:10")).toBe(
-      slot.starts_at.replace("Z", ".000Z"),
-    );
-    expect(parseWibDateTime("2026-10-30T09:30")).toBe(
-      "2026-10-30T02:30:00.000Z",
-    );
-    const precise = "2026-10-30T02:30:10.123456+00:00";
-    expect(parseWibDateTime(wibDateTimeInput(precise), precise)).toBe(precise);
+  it("pickup input permits HH:mm only without any device date", () => {
+    expect(pickupTimeSchema.safeParse("00:05").success).toBe(true);
+    expect(pickupTimeSchema.safeParse("23:59").success).toBe(true);
   });
   it.each([
-    "2026-02-30T09:30",
-    "2026-13-01T09:30",
-    "2026-10-30T24:30",
-    "2026-10-30T09:60",
-    "2026-10-30T09:30:99",
-    "2026-10-30",
+    "2026-10-30T09:30",
+    "24:00",
+    "09:60",
+    "09:30:00",
+    "9:30",
     "",
-    "not-a-date",
-  ])("rejects invalid local input %s", (value) => {
-    expect(() => parseWibDateTime(value)).toThrow("Waktu sesi tidak valid");
+    "not-a-time",
+  ])("rejects invalid pickup input %s", (value) => {
+    expect(pickupTimeSchema.safeParse(value).success).toBe(false);
   });
   it("durations never wrap at midnight, go negative, or accumulate decremented state", () => {
     expect(
-      formatDuration(Date.parse(slot.ends_at) - Date.parse(slot.starts_at)),
+      formatDuration(
+        Date.parse("2026-10-30T02:50:10Z") - Date.parse(slot.starts_at),
+      ),
     ).toBe("00:20:00");
     expect(formatDuration(25 * 3600000 + 1234)).toBe("25:00:02");
     expect(formatDuration(-1000)).toBe("00:00:00");
@@ -417,23 +403,35 @@ describe("WIB formatting, session duration and hydration boundaries", () => {
     expect(renderToString(createElement(WibClock))).toBe(first);
     expect(first).toContain("--:--:--");
     expect(first).toContain('aria-live="off"');
-    expect(renderToString(createElement(SessionTiming, { slot }))).toContain(
-      "00:20:00",
-    );
+    expect(
+      renderToString(createElement(SessionTiming, { session: slot })),
+    ).toContain("--:--:--");
     expect(fetch).not.toHaveBeenCalled();
     fetch.mockRestore();
   });
-  it("fails closed without synchronized time and rejects ended sessions or invalid ordering", () => {
-    expect(availableSlot(slot, null)).toBe(false);
+  it("session duration continues past 24 hours and stops at the server end timestamp", () => {
+    const ended = {
+      ...slot,
+      starts_at: "2026-10-30T00:00:00Z",
+      ends_at: "2026-10-31T01:02:03.987Z",
+      active: false,
+    };
+    const first = renderToString(
+      createElement(SessionTiming, { session: ended }),
+    );
+    expect(first).toContain("25:02:03");
+    expect(first).toContain("Selesai");
+    vi.setSystemTime(new Date("2100-01-01T00:00:00Z"));
     expect(
-      availableSlot({ ...slot, ends_at: "2026-10-30T02:20:00Z" }, epoch),
-    ).toBe(false);
+      renderToString(createElement(SessionTiming, { session: ended })),
+    ).toBe(first);
+  });
+  it("rejects ended sessions and the removed scheduling mutation", () => {
+    expect(openSession({ ...slot, ends_at: "2026-10-30T02:20:00Z" })).toBe(
+      false,
+    );
     expect(
-      commandSchema.safeParse({
-        type: "slot",
-        id: null,
-        data: { ...slot, cutoff_at: slot.ends_at },
-      }).success,
+      commandSchema.safeParse({ type: "slot", id: null, data: slot }).success,
     ).toBe(false);
   });
   it("time endpoint returns precise uncached server epoch and needs no identity", async () => {

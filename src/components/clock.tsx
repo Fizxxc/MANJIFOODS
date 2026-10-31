@@ -1,7 +1,7 @@
 "use client";
 import { useServerClock } from "@/hooks/use-server-clock";
 import { formatDuration, formatWibTime } from "@/lib/time";
-import type { Slot } from "@/lib/domain";
+import type { Session } from "@/lib/domain";
 
 export function WibClock() {
   const { now, synchronized } = useServerClock();
@@ -23,20 +23,27 @@ export function WibClock() {
   );
 }
 
-export function SessionTiming({ slot }: { slot: Slot }) {
+export function SessionTiming({
+  session,
+  compact = false,
+}: {
+  session: Session;
+  compact?: boolean;
+}) {
   const { now } = useServerClock();
-  const start = Date.parse(slot.starts_at),
-    end = Date.parse(slot.ends_at);
+  const start = Date.parse(session.starts_at);
+  const end = session.ends_at === null ? now : Date.parse(session.ends_at);
   return (
-    <span className="session-timing small muted">
-      Durasi {formatDuration(end - start)}
-      {now === null
-        ? " · Menyinkronkan waktu…"
-        : now < start
-          ? ` · Mulai dalam ${formatDuration(start - now)}`
-          : now < end
-            ? ` · Sisa sesi ${formatDuration(end - now)}`
-            : " · Sesi selesai"}
+    <span
+      className={
+        compact ? "session-timing sync-status" : "session-timing small muted"
+      }
+    >
+      Durasi sesi{" "}
+      {end === null
+        ? "--:--:--"
+        : formatDuration(Math.floor(Math.max(0, end - start) / 1000) * 1000)}
+      {!compact && (session.ends_at === null ? " · Berlangsung" : " · Selesai")}
     </span>
   );
 }

@@ -17,7 +17,8 @@
 /CHECKOUT
 [Back] Konfirmasi pesanan
 [Products, qty, price locked on server]
-[Pilih sesi pengambilan] dropdown (available slots only)
+[Jam pengambilan (WIB)] HH:mm only
+[Server-resolved pickup date/time confirmation]
 [Pembayaran] (QRIS statis) (Cash)
 [Total Rp16.000]
 [Pesan sekarang] -> idempotent transaction
@@ -58,7 +59,7 @@
   [Open / accept]
 ```
 
-Admin operational detail: verified pay only after checking real merchant settlement. Pickup completion requests pickup code and verifies cash collection. Product editor includes photo, stock, category, visibility, optional variants. Settings hold hours, breaks, cutoff, QRIS payload, push, sound.
+Admin operational detail: verified pay only after checking real merchant settlement. Pickup completion requests pickup code and verifies cash collection. Product editor includes photo, stock, category, visibility, optional variants. Session screen has Start Session / End Session only with server timestamps and live duration, no date editor/cutoff/active checkbox; one session remains open across midnight until explicitly ended. Settings retain location, descriptive hours, QRIS payload, push and sound. See docs/SESSIONS.md.
 
 ## Routes (suggested)
 `/login`, `/register`, `/forgot-password`, `/menu`, `/menu/[slug]`, `/cart`, `/checkout`, `/orders`, `/orders/[id]`, `/profile`, `/profile/edit`, `/notifications`, `/about`, `/admin`, `/admin/orders/[id]`, `/admin/products`, `/admin/categories`, `/admin/payments`, `/admin/sessions`, `/admin/reports`, `/admin/settings`.

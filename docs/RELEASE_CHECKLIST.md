@@ -2,10 +2,10 @@
 
 Kode lokal bukan bukti integrasi hosted. Catat tanggal, environment, akun uji dan hasil tanpa menyimpan password/token/QRIS merchant dalam repo.
 
-- [ ] Terapkan 001 lalu 002 pada proyek Supabase yang benar setelah backup/review schema. Periksa grants, SECURITY DEFINER search_path, RLS setiap tabel dan bucket privat.
+- [ ] Terapkan 001 → 002 → 003 pada proyek Supabase yang benar setelah backup/review schema. Pada database yang sudah memiliki 001/002, terapkan hanya 003 sesuai docs/SESSIONS.md. Periksa grants, SECURITY DEFINER search_path, RLS dan bucket privat.
 - [ ] Daftar dua siswa dan satu admin bootstrap tepercaya. Verifikasi email, login, refresh sesi, logout, pemulihan email dan sesi lama setelah password reset.
 - [ ] Coba membaca/mengubah profil, keranjang, tiket, pembayaran, bukti dan subscriptions siswa lain via Supabase REST/RPC langsung. Pastikan role metadata tidak menaikkan privilege.
-- [ ] Jalankan checkout berbarengan lewat dua koneksi nyata untuk stok akhir dan kapasitas akhir. Periksa rollback, retry setelah koneksi terputus, total snapshot dan idempotensi.
+- [ ] Uji dua admin Start bersamaan dan End versus checkout lewat koneksi nyata: satu sesi terbuka, stok akhir tidak negatif, rollover HH:mm WIB dan pratinjau tidak bergeser diam-diam. Periksa rollback, retry, snapshot dan idempotensi serta data/pembayaran lama.
 - [ ] Uji QRIS asli pada aplikasi pembayaran: nama merchant tepat, payload tidak berubah, nominal diisi manual. Cocokkan settlement nyata sebelum paid. Uji referensi duplikat, claim salah, late settlement dan refund yang benar-benar dilakukan.
 - [ ] Uji tunai sampai kode ambil: salah kode/belum lunas harus ditolak. Satu penyelesaian dan satu pembatalan/restock saja saat retry.
 - [ ] Unggah JPG/PNG/WebP 4 MiB, file lebih besar, file berkedok gambar, akses URL privat tanpa sesi dan siswa lain, serta expiry signed URL.

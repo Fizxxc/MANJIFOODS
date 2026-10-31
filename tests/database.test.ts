@@ -2,7 +2,7 @@ import { PGlite, type PGliteInterface } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { beforeAll, beforeEach, afterAll, describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { crc16, type Slot } from "../src/lib/domain";
+import { crc16, type Session as Slot } from "../src/lib/domain";
 const A = "11111111-1111-4111-8111-111111111111",
   B = "22222222-2222-4222-8222-222222222222",
   ADMIN = "33333333-3333-4333-8333-333333333333",
@@ -10,6 +10,26 @@ const A = "11111111-1111-4111-8111-111111111111",
   S = "55555555-5555-4555-8555-555555555555",
   V = "66666666-6666-4666-8666-666666666666";
 let db: PGlite;
+let legacyBefore: unknown,
+  legacyAfter: unknown,
+  legacyPickupBackfilled: boolean;
+async function snapshotLegacy() {
+  const result: Record<string, unknown> = {};
+  for (const table of [
+    "orders",
+    "order_items",
+    "payments",
+    "pickup_slots",
+    "pickup_tickets",
+  ]) {
+    result[table] = (
+      await db.query(
+        `select to_jsonb(t)-'pickup_at'-'session_mode'-'start_key' as record from public.${table} t`,
+      )
+    ).rows;
+  }
+  return result;
+}
 const sql = (name: string) =>
   readFileSync(
     new URL("../supabase/migrations/" + name, import.meta.url),
@@ -36,13 +56,16 @@ async function checkout(
   key = crypto.randomUUID(),
   slot = S,
 ) {
+  const pickup = await scalar(
+    "select public.resolve_pickup_at('23:59',clock_timestamp())",
+  );
   return actor(
     uid,
     async (tx) =>
       (
         await tx.query<{ id: string }>(
-          "select public.checkout($1,$2,$3,$4) id",
-          [slot, method, key, ""],
+          "select public.checkout_session($1,'23:59',$5,$2,$3,$4) id",
+          [slot, method, key, "", pickup],
         )
       ).rows[0].id,
   );
@@ -90,6 +113,32 @@ beforeAll(async () => {
  `);
   await db.exec(sql("001_initial_schema.sql"));
   await db.exec(sql("002_operations.sql"));
+  // A real pre-003 order, not an empty-schema migration test.
+  await db.query("insert into auth.users(id) values($1)", [A]);
+  await db.query(
+    "insert into public.products(id,name,slug,price_idr,stock) values($1,'Legacy menu','legacy-menu',1000,10)",
+    [P],
+  );
+  await db.query(
+    "insert into public.pickup_slots(id,title,starts_at,ends_at,cutoff_at,capacity) values($1,'Legacy session',now()+interval '2 hours',now()+interval '3 hours',now()+interval '1 hour',30)",
+    [S],
+  );
+  await db.exec(
+    "update public.app_settings set value=value||'{\"open\":true}' where key='store'",
+  );
+  await cart();
+  await actor(A, (tx) =>
+    tx.query("select public.checkout($1,'cash',$2,'')", [
+      S,
+      crypto.randomUUID(),
+    ]),
+  );
+  legacyBefore = await snapshotLegacy();
+  await db.exec(sql("003_manual_sessions.sql"));
+  legacyAfter = await snapshotLegacy();
+  legacyPickupBackfilled = await scalar<boolean>(
+    "select bool_and(o.pickup_at=s.starts_at) from orders o join pickup_slots s on s.id=o.pickup_slot_id",
+  );
 });
 afterAll(async () => {
   await db?.close();
@@ -114,8 +163,8 @@ beforeEach(async () => {
     [V, P],
   );
   await db.query(
-    "insert into public.pickup_slots(id,title,starts_at,ends_at,cutoff_at,capacity) values($1,'Sesi tes',now()+interval '2 hours',now()+interval '3 hours',now()+interval '1 hour',2)",
-    [S],
+    "insert into public.pickup_slots(id,title,starts_at,ends_at,cutoff_at,capacity,session_mode,start_key) values($1,'Sesi tes',clock_timestamp(),null,null,null,'manual',$2)",
+    [S, crypto.randomUUID()],
   );
   await db.query(
     "update public.app_settings set value=jsonb_build_object('open',true,'qris_payload',$1::text,'pickup_location','Lokasi tes','hours','') where key='store'",
@@ -123,6 +172,10 @@ beforeEach(async () => {
   );
 });
 describe("actual migrations and RPC invariants in PostgreSQL (PGlite)", () => {
+  it("003 preserves every original order/item/payment/session/ticket field and backfills pickup appointments", () => {
+    expect(legacyAfter).toEqual(legacyBefore);
+    expect(legacyPickupBackfilled).toBe(true);
+  });
   it("provides global queue counts only to an admin", async () => {
     await cart();
     await checkout();
@@ -139,7 +192,7 @@ describe("actual migrations and RPC invariants in PostgreSQL (PGlite)", () => {
   it("preserves access to an inactive historical pickup slot for its owner only", async () => {
     await cart();
     await checkout();
-    await db.exec("update pickup_slots set active=false");
+    await actor(ADMIN, (tx) => tx.query("select public.session_end($1)", [S]));
     expect(
       (await actor(A, (tx) => tx.query("select id from pickup_slots"))).rows,
     ).toHaveLength(1);
@@ -285,15 +338,15 @@ describe("actual migrations and RPC invariants in PostgreSQL (PGlite)", () => {
     expect(await scalar("select stock from products")).toBe(0);
     expect(await scalar("select count(*)::int from orders")).toBe(1);
   });
-  it("does not overbook the final pickup place", async () => {
-    await db.exec("update pickup_slots set capacity=1");
+  it("keeps a manual session open without an artificial pickup capacity", async () => {
     await cart(A);
     await cart(B);
     await checkout(A);
-    await expect(checkout(B)).rejects.toThrow("Sesi");
-    expect(await scalar("select reserved_count from pickup_slots")).toBe(1);
+    await checkout(B);
+    expect(await scalar("select capacity from pickup_slots")).toBeNull();
+    expect(await scalar("select reserved_count from pickup_slots")).toBe(2);
   });
-  it.each(["closed", "cutoff", "inactive", "variant"])(
+  it.each(["closed", "ended", "inactive", "variant"])(
     "rejects %s without leaving an order",
     async (kind) => {
       await cart(A, 1, V);
@@ -301,9 +354,9 @@ describe("actual migrations and RPC invariants in PostgreSQL (PGlite)", () => {
         await db.exec(
           "update app_settings set value=value||'{\"open\":false}'",
         );
-      if (kind === "cutoff")
-        await db.exec(
-          "update pickup_slots set cutoff_at=now()-interval '1 second'",
+      if (kind === "ended")
+        await actor(ADMIN, (tx) =>
+          tx.query("select public.session_end($1)", [S]),
         );
       if (kind === "inactive")
         await db.exec("update products set active=false");
@@ -544,7 +597,7 @@ describe("actual migrations and RPC invariants in PostgreSQL (PGlite)", () => {
       actor(A, (tx) => tx.exec("select public.consume_rate_limit()")),
     ).rejects.toThrow("Terlalu");
   });
-  it("locks reserved slot times while allowing non-destructive capacity adjustments", async () => {
+  it("rejects the removed date-based session mutation path", async () => {
     await cart();
     await checkout();
     const slot = (await db.query<Slot>("select * from pickup_slots")).rows[0];
@@ -558,6 +611,235 @@ describe("actual migrations and RPC invariants in PostgreSQL (PGlite)", () => {
           }),
         ]),
       ),
-    ).rejects.toThrow("Waktu");
+    ).rejects.toThrow("Start Session");
+  });
+
+  it("only admins start/end sessions and old checkout/private helpers cannot be invoked by students", async () => {
+    for (const statement of [
+      "select public.session_start(gen_random_uuid())",
+      `select public.session_end('${S}')`,
+      `select public.checkout('${S}','cash',gen_random_uuid(),'')`,
+      "select public.resolve_pickup_at('09:30',clock_timestamp())",
+      "select public.admin_save_legacy('slot',null,'{}')",
+    ])
+      await expect(actor(A, (tx) => tx.exec(statement))).rejects.toThrow();
+  });
+
+  it("keeps authorized category/product/variant editing working through the guarded catalog wrapper", async () => {
+    const save = (kind: string, id: string | null, data: unknown) =>
+      actor(
+        ADMIN,
+        async (tx) =>
+          (
+            await tx.query<{ id: string }>(
+              "select public.admin_save($1,$2,$3::jsonb) id",
+              [kind, id, JSON.stringify(data)],
+            )
+          ).rows[0].id,
+      );
+    const category = await save("category", null, {
+      name: "Kategori baru",
+      sort_order: 1,
+      active: true,
+    });
+    await save("product", P, {
+      name: "Menu diperbarui",
+      slug: "menu-diperbarui",
+      description: "",
+      category_id: category,
+      price_idr: 13000,
+      stock: 10,
+      image_path: "",
+      active: true,
+    });
+    await save("variant", V, {
+      product_id: P,
+      name: "Varian diperbarui",
+      price_delta_idr: 3000,
+      active: true,
+    });
+    expect(await scalar("select name from products where id=$1", [P])).toBe(
+      "Menu diperbarui",
+    );
+    expect(
+      await scalar("select category_id from products where id=$1", [P]),
+    ).toBe(category);
+    expect(
+      await scalar("select price_delta_idr from product_variants where id=$1", [
+        V,
+      ]),
+    ).toBe(3000);
+  });
+  it("start/end are retry safe and only one manual session can be open", async () => {
+    await actor(ADMIN, (tx) => tx.query("select public.session_end($1)", [S]));
+    const key = crypto.randomUUID();
+    const start = (key: string) =>
+      actor(
+        ADMIN,
+        async (tx) =>
+          (
+            await tx.query<{ id: string }>(
+              "select public.session_start($1) id",
+              [key],
+            )
+          ).rows[0].id,
+      );
+    const ids = await Promise.all([start(key), start(crypto.randomUUID())]);
+    expect(ids[0]).toBe(ids[1]);
+    expect(
+      await scalar(
+        "select count(*)::int from pickup_slots where session_mode='manual' and ends_at is null",
+      ),
+    ).toBe(1);
+    expect(await start(key)).toBe(ids[0]);
+    await expect(
+      db.query(
+        "insert into pickup_slots(title,starts_at,ends_at,cutoff_at,capacity,active,session_mode,start_key) values('illegal',clock_timestamp(),null,null,null,true,'manual',gen_random_uuid())",
+      ),
+    ).rejects.toThrow();
+    await actor(ADMIN, (tx) =>
+      tx.query("select public.session_end($1)", [ids[0]]),
+    );
+    const fresh = await start(crypto.randomUUID());
+    expect(fresh).not.toBe(ids[0]);
+    await actor(ADMIN, (tx) =>
+      tx.query("select public.session_end($1)", [ids[0]]),
+    );
+    expect(await start(key)).toBe(ids[0]); // replay cannot reopen an ended session
+    expect(
+      await scalar(
+        "select (value->>'open')::boolean from app_settings where key='store'",
+      ),
+    ).toBe(true);
+    expect(
+      await scalar("select active from pickup_slots where id=$1", [fresh]),
+    ).toBe(true);
+  });
+
+  it("records server lifecycle timestamps and keeps sessions open for multiple days", async () => {
+    await db.exec(
+      "update pickup_slots set starts_at=clock_timestamp()-interval '3 days' where session_mode='manual'",
+    );
+    await cart();
+    const id = await checkout();
+    expect(
+      await scalar("select ends_at from pickup_slots where id=$1", [S]),
+    ).toBeNull();
+    expect(
+      await scalar(
+        "select pickup_at>clock_timestamp() from orders where id=$1",
+        [id],
+      ),
+    ).toBe(true);
+    const before = await scalar<string>("select clock_timestamp()::text");
+    await actor(ADMIN, (tx) => tx.query("select public.session_end($1)", [S]));
+    expect(
+      await scalar(
+        "select ends_at >= $1::timestamptz and ends_at <= clock_timestamp() from pickup_slots where id=$2",
+        [before, S],
+      ),
+    ).toBe(true);
+    expect(
+      await scalar(
+        "select count(*)::int from audit_logs where operation='session_end'",
+      ),
+    ).toBe(1);
+  });
+
+  it("ending a session blocks new orders but preserves existing orders, payment, reservations and pickup timestamp", async () => {
+    await cart();
+    const id = await checkout();
+    const before = await snapshotLegacy();
+    const pickup = await scalar("select pickup_at from orders where id=$1", [
+      id,
+    ]);
+    await actor(ADMIN, (tx) => tx.query("select public.session_end($1)", [S]));
+    const after = await snapshotLegacy();
+    expect((after as Record<string, unknown>).orders).toEqual(
+      (before as Record<string, unknown>).orders,
+    );
+    expect((after as Record<string, unknown>).payments).toEqual(
+      (before as Record<string, unknown>).payments,
+    );
+    expect((after as Record<string, unknown>).order_items).toEqual(
+      (before as Record<string, unknown>).order_items,
+    );
+    expect(
+      await scalar("select pickup_at from orders where id=$1", [id]),
+    ).toEqual(pickup);
+    await cart(B);
+    await expect(checkout(B)).rejects.toThrow();
+    await command(id, "confirmed");
+    await command(id, "preparing");
+    await command(id, "ready");
+    await command(id, "collect_cash");
+    const code = await scalar<string>(
+      "select code from pickup_tickets where order_id=$1",
+      [id],
+    );
+    await command(id, "completed", ADMIN, "", code);
+    expect(await scalar("select status from orders where id=$1", [id])).toBe(
+      "completed",
+    );
+  });
+
+  it.each([
+    ["2026-10-30T16:58:00Z", "00:05", "2026-10-30T17:05:00.000Z"],
+    ["2026-10-30T17:01:00Z", "00:05", "2026-10-30T17:05:00.000Z"],
+    ["2026-10-30T02:30:15Z", "09:30", "2026-10-31T02:30:00.000Z"],
+    ["2026-10-30T02:30:15Z", "09:31", "2026-10-30T02:31:00.000Z"],
+  ])("resolves HH:mm in Asia/Jakarta at %s", async (base, time, expected) => {
+    for (const zone of ["UTC", "America/New_York", "Asia/Tokyo"]) {
+      await db.exec(`set timezone='${zone}'`);
+      const stamp = await scalar<string>(
+        "select public.resolve_pickup_at($1,$2)::text",
+        [time, base],
+      );
+      expect(new Date(stamp).toISOString()).toBe(expected);
+    }
+    await db.exec("set timezone='UTC'");
+  });
+
+  it.each([null, "24:00", "09:60", "9:30", "09:30:00", "2030-01-01T09:30", ""])(
+    "rejects invalid pickup input %s in SQL",
+    async (value) => {
+      await expect(
+        db.query("select public.resolve_pickup_at($1,clock_timestamp())", [
+          value,
+        ]),
+      ).rejects.toThrow("HH:mm");
+    },
+  );
+
+  it("previews pickup timestamps on the server and rejects date tampering without reserving anything", async () => {
+    const preview = await actor(
+      A,
+      async (tx) =>
+        (
+          await tx.query<{ value: { session_id: string; pickup_at: string } }>(
+            "select public.pickup_time_preview('23:59') value",
+          )
+        ).rows[0].value,
+    );
+    expect(preview.session_id).toBe(S);
+    await cart();
+    await expect(
+      actor(A, (tx) =>
+        tx.query("select public.checkout_session($1,'23:59',$2,'cash',$3,'')", [
+          S,
+          new Date(Date.parse(preview.pickup_at) + 86400000).toISOString(),
+          crypto.randomUUID(),
+        ]),
+      ),
+    ).rejects.toThrow("Jam pengambilan berubah");
+    expect(await scalar("select count(*)::int from orders")).toBe(0);
+    expect(await scalar("select stock from products")).toBe(10);
+    expect(await scalar("select reserved_count from pickup_slots")).toBe(0);
+    await checkout();
+    expect(
+      await scalar(
+        "select count(*)::int from orders where pickup_at is not null",
+      ),
+    ).toBe(1);
   });
 });

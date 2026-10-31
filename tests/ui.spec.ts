@@ -57,64 +57,52 @@ test.describe("server-synchronized WIB clock", () => {
     expect(requests).toBe(2);
   });
 
-  test("expires a selected pickup slot and disables checkout without refreshing", async ({
-    page,
-  }) => {
-    const base = Date.now();
+  test("pickup is HH:mm only and uses the server preview", async ({ page }) => {
     const data = fixture();
-    data.slots[0].cutoff_at = new Date(base + 4000).toISOString();
-    let commands = 0;
-    await page.route("**/api/data?*", (route) => route.fulfill({ json: data }));
-    await page.route("**/api/time", (route) =>
-      route.fulfill({ json: { serverTime: base } }),
+    await page.route("**/api/pickup-time", (route) =>
+      route.fulfill({
+        json: {
+          session_id: data.sessions[0].id,
+          pickup_at: "2030-10-30T17:05:00Z",
+          server_now: new Date().toISOString(),
+        },
+      }),
     );
-    await page.route("**/api/command", (route) => {
-      commands++;
-      return route.fulfill({ json: { ok: true } });
-    });
     await page.goto("/checkout");
-    const select = page.getByLabel("Pilih sesi pengambilan");
-    await expect(select).toBeEnabled();
-    await select.selectOption(data.slots[0].id);
-    const submit = page.getByRole("button", {
-      name: "Pesan sekarang",
-      exact: true,
-    });
-    await expect(submit).toBeEnabled();
-    await expect(submit).toBeDisabled({ timeout: 7000 });
-    await expect(select).toHaveValue("");
+    await page.getByLabel("Jam pengambilan (WIB)").fill("00:05");
+    await expect(page.getByText(/Pengambilan:/)).toContainText("00:05:00 WIB");
     await expect(
-      page.getByText("Sesi pilihanmu sudah tidak tersedia. Pilih sesi lain."),
-    ).toBeVisible();
-    expect(commands).toBe(0);
+      page.getByRole("button", { name: "Pesan sekarang", exact: true }),
+    ).toBeEnabled();
+    await expect(
+      page.locator('input[type="date"], input[type="datetime-local"]'),
+    ).toHaveCount(0);
   });
-
-  test("admin session inputs use WIB even on a US browser and preserve stored precision", async ({
-    page,
-  }) => {
+  test("admin session page only starts and ends sessions", async ({ page }) => {
     const data = fixture(true);
-    data.slots[0].starts_at = "2026-10-30T02:30:10.123456Z";
-    data.slots[0].ends_at = "2026-10-30T03:30:10.123456Z";
-    data.slots[0].cutoff_at = "2026-10-30T02:20:10.123456Z";
+    let last: { type: string } | undefined;
     await page.route("**/api/data?*", (route) => route.fulfill({ json: data }));
-    let submitted:
-      | { data: { starts_at: string; ends_at: string; cutoff_at: string } }
-      | undefined;
     await page.route("**/api/command", (route) => {
-      submitted = route.request().postDataJSON();
-      return route.fulfill({ json: { ok: true } });
+      last = route.request().postDataJSON();
+      if (last?.type === "session_end") {
+        data.sessions[0].ends_at = new Date().toISOString();
+        data.sessions[0].active = false;
+      }
+      return route.fulfill({ json: { ok: true, data: data.sessions[0].id } });
     });
     await page.goto("/admin/sessions");
-    await page.getByRole("button", { name: "Edit", exact: true }).click();
-    await expect(page.getByLabel("Mulai", { exact: true })).toHaveValue(
-      "2026-10-30T09:30:10",
-    );
-    await page.getByLabel("Kapasitas pesanan").fill("31");
-    await page.getByRole("button", { name: "Simpan sesi" }).click();
-    await expect.poll(() => submitted).toBeTruthy();
-    expect(submitted?.data.starts_at).toBe(data.slots[0].starts_at);
-    expect(submitted?.data.ends_at).toBe(data.slots[0].ends_at);
-    expect(submitted?.data.cutoff_at).toBe(data.slots[0].cutoff_at);
+    await expect(
+      page.locator(
+        'input[type="date"], input[type="datetime-local"], input[type="checkbox"]',
+      ),
+    ).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Akhiri sesi", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "Mulai sesi", exact: true }),
+    ).toBeVisible();
+    expect(last?.type).toBe("session_end");
   });
 });
 for (const width of widths)
@@ -166,20 +154,19 @@ test("admin product, category and session forms are available", async ({
     .click();
   await expect(page.getByLabel("Nama kategori")).toBeVisible();
   await page.goto("/admin/sessions");
-  await page.getByRole("button", { name: "Tambah sesi", exact: true }).click();
-  await expect(page.getByLabel("Kapasitas pesanan")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Akhiri sesi", exact: true }),
+  ).toBeVisible();
 });
 test("keyboard focus and checkout required fields", async ({ page }) => {
   await page.goto("/checkout");
   await expect(
     page.getByRole("button", { name: "Pesan sekarang" }),
   ).toBeDisabled();
-  await page
-    .getByLabel("Pilih sesi pengambilan")
-    .selectOption("55555555-5555-4555-8555-555555555555");
-  await expect(
-    page.getByRole("button", { name: "Pesan sekarang" }),
-  ).toBeEnabled();
+  await expect(page.getByLabel("Jam pengambilan (WIB)")).toHaveAttribute(
+    "required",
+    "",
+  );
   await page.goto("/login");
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: "Kembali" })).toBeFocused();

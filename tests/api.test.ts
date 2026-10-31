@@ -16,6 +16,7 @@ vi.mock("../src/lib/supabase/server", () => ({
 import { POST as command } from "../src/app/api/command/route";
 import { POST as auth } from "../src/app/api/auth/route";
 import { POST as upload } from "../src/app/api/upload/route";
+import { POST as pickupPreview } from "../src/app/api/pickup-time/route";
 import {
   assertOrigin,
   authThrottle,
@@ -55,6 +56,86 @@ beforeEach(() => {
   mocks.reset.mockResolvedValue({ error: null });
 });
 describe("HTTP command/auth boundary (mock transport, real validators)", () => {
+  it.each(["session_start", "session_end"])(
+    "%s requires admin and accepts no caller timestamps",
+    async (type) => {
+      const id = crypto.randomUUID();
+      const res = await command(
+        request({
+          type,
+          key: id,
+          session: id,
+          starts_at: "2099-01-01T00:00:00Z",
+          ends_at: "2099-01-02T00:00:00Z",
+          active: true,
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(mocks.identity).toHaveBeenCalledWith(true);
+      expect(mocks.rpc).toHaveBeenLastCalledWith(
+        type,
+        type === "session_start" ? { p_key: id } : { p_session: id },
+      );
+      mocks.identity.mockRejectedValueOnce(new Error("ADMIN_REQUIRED"));
+      expect(
+        (await command(request({ type, key: id, session: id }))).status,
+      ).toBe(403);
+    },
+  );
+  it("rejects the obsolete date editor before any RPC", async () => {
+    expect(
+      (
+        await command(
+          request({
+            type: "slot",
+            id: null,
+            data: { starts_at: "2030-01-01T00:00:00Z" },
+          }),
+        )
+      ).status,
+    ).toBe(400);
+    expect(mocks.rpc).not.toHaveBeenCalled();
+  });
+  it("pickup preview forwards only HH:mm and returns the authoritative server timestamp", async () => {
+    const preview = {
+      session_id: crypto.randomUUID(),
+      pickup_at: "2030-01-01T17:05:00Z",
+      server_now: "2030-01-01T16:55:00Z",
+    };
+    mocks.rpc
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockResolvedValueOnce({ data: preview, error: null });
+    const res = await pickupPreview(
+      request({
+        time: "00:05",
+        date: "2099-01-01",
+        server_now: "2099-01-01T00:00:00Z",
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(preview);
+    expect(mocks.rpc).toHaveBeenLastCalledWith("pickup_time_preview", {
+      p_time: "00:05",
+    });
+    expect(res.headers.get("cache-control")).toContain("no-store");
+  });
+  it.each(["24:00", "09:60", "09:30:00", "2030-01-01T09:30", "9:30", ""])(
+    "rejects malformed pickup time %s before identity",
+    async (time) => {
+      expect((await pickupPreview(request({ time }))).status).toBe(400);
+      expect(mocks.identity).not.toHaveBeenCalled();
+      expect(mocks.rpc).not.toHaveBeenCalled();
+    },
+  );
+  it("pickup preview rejects cross-origin and anonymous requests", async () => {
+    expect(
+      (await pickupPreview(request({ time: "09:30" }, "https://evil.invalid")))
+        .status,
+    ).toBe(403);
+    mocks.identity.mockRejectedValueOnce(new Error("AUTH_REQUIRED"));
+    expect((await pickupPreview(request({ time: "09:30" }))).status).toBe(401);
+    expect(mocks.rpc).not.toHaveBeenCalled();
+  });
   const credentials = {
     action: "login",
     email: "student@example.invalid",
@@ -195,15 +276,19 @@ describe("HTTP command/auth boundary (mock transport, real validators)", () => {
     await command(
       request({
         type: "checkout",
-        slot,
+        session: slot,
+        pickup_time: "09:30",
+        expected_pickup_at: "2030-01-01T02:30:00Z",
         key,
         method: "cash",
         note: "",
         total_idr: 1,
       }),
     );
-    expect(mocks.rpc).toHaveBeenLastCalledWith("checkout", {
-      p_slot: slot,
+    expect(mocks.rpc).toHaveBeenLastCalledWith("checkout_session", {
+      p_session: slot,
+      p_pickup_time: "09:30",
+      p_expected_pickup_at: "2030-01-01T02:30:00Z",
       p_method: "cash",
       p_key: key,
       p_note: "",

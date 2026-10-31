@@ -336,7 +336,7 @@ export function AdminSound({
             <p className="small">
               {unresolved[0].order_number} ·{" "}
               {
-                data.slots.find((s) => s.id === unresolved[0].pickup_slot_id)
+                data.sessions.find((s) => s.id === unresolved[0].pickup_slot_id)
                   ?.title
               }{" "}
               ·{" "}

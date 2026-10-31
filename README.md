@@ -25,6 +25,7 @@ Untuk proyek **baru/kosong**, jalankan sekali melalui SQL Editor Supabase, denga
 
 1. `supabase/migrations/001_initial_schema.sql` — salinan starter asli yang telah diperiksa.
 2. `supabase/migrations/002_operations.sql` — RPC transaksional, grants, RLS, storage, audit dan outbox.
+3. `supabase/migrations/003_manual_sessions.sql` — sesi Start/End, satu sesi terbuka dan resolusi jam ambil WIB. Lihat [rencana migrasi](docs/SESSIONS.md) untuk database berisi data.
 
 Jangan menjalankan kembali `database/001_initial_schema.sql` setelah migrasi 001. Untuk database yang sudah berisi tabel/aplikasi, bandingkan schema dan siapkan migrasi penyesuaian terlebih dahulu; file ini bukan skrip overwrite. Tidak ada migrasi hosted yang diterapkan oleh proses implementasi ini.
 
@@ -48,11 +49,11 @@ Masuk sebagai admin dan buka `/admin`:
 
 1. `/admin/categories`: kategori asli kantin.
 2. `/admin/products`: menu, foto JPG/PNG/WebP maksimal 4 MiB, harga rupiah, stok **tersedia di luar pesanan yang telah direservasi**, varian. Nonaktifkan menu/varian untuk mengarsipkan; tidak menghapus snapshot pesanan.
-3. `/admin/sessions`: tanggal, waktu, kapasitas pesanan, batas pesan. UI menampilkan WIB; input tanggal mengikuti zona waktu perangkat. Waktu sesi yang sudah dipesan tidak dapat diubah.
+3. `/admin/sessions`: **Mulai sesi / Akhiri sesi**. Timestamp otomatis dari server, hanya satu sesi terbuka, tidak berakhir otomatis walau melewati tengah malam. Tidak ada input tanggal/deadline/checkbox aktif.
 4. `/admin/settings`: lokasi tunggal, keterangan jam, payload asli QRIS statis dari merchant. Validasi TLV/checksum tidak membuktikan keaslian merchant: pindai dengan aplikasi pembayaran dan cocokkan nama merchant sebelum membuka layanan. Payload ditampilkan tanpa perubahan dan tanpa penyisipan nominal. Kosongkan untuk hanya menerima tunai.
-5. Aktifkan penerimaan pesanan. Tidak ada sesi/stok berarti checkout tidak tersedia meskipun kantin dibuka.
+5. Mulai sesi untuk menerima pesanan. Jeda toko tetap dapat dipakai tanpa mengakhiri sesi. Tanpa sesi terbuka/stok, checkout tidak tersedia.
 
-Siswa memilih menu → keranjang persisten per akun → sesi → checkout → tiket permanen. Harga/varian/stok dihitung dari database pada checkout. Perkiraan harga dapat berubah; **bayar total tiket hasil server**, bukan estimasi keranjang. Retry memakai kunci idempotensi yang disimpan di sessionStorage; keranjang dan tiket tersimpan di database.
+Siswa memilih menu → keranjang persisten per akun → jam ambil HH:mm → konfirmasi waktu server → checkout → tiket permanen. Harga/varian/stok dihitung dari database pada checkout. Perkiraan harga dapat berubah; **bayar total tiket hasil server**, bukan estimasi keranjang. Retry memakai kunci idempotensi yang disimpan di sessionStorage; keranjang dan tiket tersimpan di database.
 
 ## Pembayaran dan pengambilan
 
@@ -60,8 +61,8 @@ Siswa memilih menu → keranjang persisten per akun → sesi → checkout → ti
 - Admin mencocokkan jumlah, waktu dan referensi dana masuk nyata pada ledger merchant. Referensi harus unik; satu penerimaan dana tidak dapat dipakai dua kali.
 - Tunai: admin mencatat uang yang benar-benar telah diterima. Persiapan boleh berjalan sebelum pembayaran, tetapi penyelesaian wajib sudah lunas dan kode 10 karakter sesuai tiket siswa.
 - Pesanan: `pending → confirmed → preparing → ready → completed`. Pembayaran memiliki status terpisah.
-- Pembatalan/penolakan sebelum persiapan mengembalikan stok dan kapasitas tepat sekali. Klaim pembayaran harus ditolak/direkonsiliasi dahulu; dana lunas harus dikembalikan nyata dan dicatat sebelum pembatalan.
-- Tidak ada expiry otomatis atau refund otomatis. Admin meninjau reservasi yang tidak dibayar dan menutup sesi saat cutoff. Pembayaran terlambat pada tiket batal harus memiliki catatan rekonsiliasi; pengembalian dicatat dengan referensi dan alasan setelah benar-benar dilakukan di luar aplikasi.
+- Pembatalan/penolakan sebelum persiapan mengembalikan stok dan melepaskan hitungan reservasi sesi tepat sekali. Klaim pembayaran harus ditolak/direkonsiliasi dahulu; dana lunas harus dikembalikan nyata dan dicatat sebelum pembatalan.
+- Tidak ada expiry otomatis atau refund otomatis. Admin meninjau reservasi yang tidak dibayar dan mengakhiri sesi secara manual. Pembayaran terlambat pada tiket batal harus memiliki catatan rekonsiliasi; pengembalian dicatat dengan referensi dan alasan setelah benar-benar dilakukan di luar aplikasi.
 
 Bukti berada di bucket privat `payment-proofs`; URL bertanda tangan hanya dibuat setelah RLS mengizinkan pemilik/admin dan berlaku 60 detik. Foto menu berada di bucket publik terpisah. Batas upload 4 MiB dipilih agar multipart tetap di bawah batas body Vercel Function.
 
@@ -119,4 +120,4 @@ Login selalu mengirim email dan kata sandi dalam body POST, termasuk ketika Java
 
 Setelah `npm run build`, jalankan `npm run test:security` untuk menguji header CSP dan nonce HTML asli, form POST, login siswa/admin, cookie sesi, logout, URL bersih, dan origin melalui server Next produksi. Transport Supabase menggunakan fixture lokal yang memblokir koneksi keluar; hasilnya tidak membuktikan login pada Supabase hosted atau eksekusi JavaScript di browser. Pemeriksaan browser dan akun staging tetap diperlukan. Rincian kebijakan ada di `docs/SECURITY.md`.
 
-Jam siswa/admin kini memakai waktu server, WIB `HH:mm:ss`, dan berjalan setiap detik tanpa refresh. Durasi sesi serta cutoff checkout memakai acuan yang sama; input jadwal admin juga selalu berarti WIB. Sinkronisasi normal hanya setiap lima menit saat tab terlihat, ditambah koreksi saat tab aktif kembali atau koneksi pulih; tidak ada request setiap detik. Sebelum sinkronisasi pertama, `--:--:-- WIB` adalah placeholder yang aman untuk hydration. Dokumentasi hook, batas validasi dan pengoperasian jam ada di [docs/TIMEKEEPING.md](docs/TIMEKEEPING.md).
+Jam siswa/admin memakai waktu server, WIB `HH:mm:ss`, dan berjalan setiap detik tanpa refresh. Durasi sesi aktif ditampilkan di header; sesi dimulai/diakhiri admin tanpa input tanggal. Jam ambil siswa HH:mm diselesaikan dan divalidasi database dalam WIB. Sinkronisasi normal hanya setiap lima menit saat tab terlihat, ditambah koreksi saat tab aktif kembali atau koneksi pulih; tidak ada request setiap detik. Sebelum sinkronisasi pertama, `--:--:-- WIB` adalah placeholder yang aman untuk hydration. Dokumentasi ada di [docs/TIMEKEEPING.md](docs/TIMEKEEPING.md) dan [docs/SESSIONS.md](docs/SESSIONS.md).

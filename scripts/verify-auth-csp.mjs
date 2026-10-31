@@ -93,6 +93,28 @@ globalThis.fetch = async (input, init) => {
       notifications_enabled: false,
     });
   }
+  if (url.pathname === "/rest/v1/rpc/consume_rate_limit" && user)
+    return json(null);
+  if (url.pathname === "/rest/v1/rpc/pickup_time_preview" && user) {
+    assert.deepEqual(JSON.parse(init.body), { p_time: "00:05" });
+    return json({
+      session_id: "55555555-5555-4555-8555-555555555555",
+      pickup_at: "2030-01-01T17:05:00Z",
+      server_now: "2030-01-01T16:55:00Z",
+    });
+  }
+  if (url.pathname === "/rest/v1/rpc/session_start" && user) {
+    assert.equal(users.get(user.id).role, "admin");
+    assert.deepEqual(Object.keys(JSON.parse(init.body)), ["p_key"]);
+    return json("55555555-5555-4555-8555-555555555555");
+  }
+  if (url.pathname === "/rest/v1/rpc/session_end" && user) {
+    assert.equal(users.get(user.id).role, "admin");
+    assert.deepEqual(JSON.parse(init.body), {
+      p_session: "55555555-5555-4555-8555-555555555555",
+    });
+    return json("55555555-5555-4555-8555-555555555555");
+  }
   throw new Error(`Unexpected provider fixture path: ${url.pathname}`);
 };
 
@@ -245,6 +267,41 @@ try {
       assert.match(landingHtml, /Verification fixture/);
       assert.match(landingHtml, /--:--:--/);
       assert.match(landingHtml, /aria-label="Waktu WIB"/);
+      if (!native) {
+        const post = (path, body) =>
+          send(path, {
+            method: "POST",
+            headers: {
+              origin: configuredOrigin,
+              cookie: cookies,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(body),
+          });
+        const pickup = await post("/api/pickup-time", {
+          time: "00:05",
+          date: "2099-01-01",
+        });
+        assert.equal(pickup.status, 200);
+        assert.equal((await pickup.json()).pickup_at, "2030-01-01T17:05:00Z");
+        assert.match(pickup.headers.get("cache-control"), /no-store/);
+        passed++;
+        const invalid = await post("/api/pickup-time", {
+          time: "2030-01-01T00:05",
+        });
+        assert.equal(invalid.status, 400);
+        passed++;
+        for (const type of ["session_start", "session_end"]) {
+          const lifecycle = await post("/api/command", {
+            type,
+            key: crypto.randomUUID(),
+            session: "55555555-5555-4555-8555-555555555555",
+            starts_at: "2099-01-01T00:00:00Z",
+          });
+          assert.equal(lifecycle.status, role === "admin" ? 200 : 403);
+          passed++;
+        }
+      }
       const logout = await send("/api/auth", {
         method: "POST",
         headers: {

@@ -57,14 +57,13 @@ export function fixture(admin = false): Data {
         active: true,
       },
     ],
-    slots: [
+    sessions: [
       {
         id: sid,
         title: "Istirahat pengujian",
-        starts_at: new Date(Date.now() + 7200000).toISOString(),
-        ends_at: new Date(Date.now() + 10800000).toISOString(),
-        cutoff_at: new Date(Date.now() + 3600000).toISOString(),
-        capacity: 30,
+        starts_at: new Date(Date.now() - 3600000).toISOString(),
+        ends_at: null,
+        session_mode: "manual",
         reserved_count: 1,
         active: true,
       },
@@ -83,6 +82,7 @@ export function fixture(admin = false): Data {
         order_number: "MF-20261030-000001",
         student_id: uid,
         pickup_slot_id: sid,
+        pickup_at: new Date(Date.now() + 7200000).toISOString(),
         status: "pending",
         payment_method: "cash",
         total_idr: 12000,

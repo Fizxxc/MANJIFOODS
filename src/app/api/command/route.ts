@@ -11,9 +11,14 @@ export async function POST(request: Request) {
         "Isian tidak valid. Periksa jumlah, waktu, dan data yang dipilih.",
       );
     const c = input.data;
-    const admin = ["product", "category", "variant", "slot", "store"].includes(
-      c.type,
-    );
+    const admin = [
+      "product",
+      "category",
+      "variant",
+      "session_start",
+      "session_end",
+      "store",
+    ].includes(c.type);
     const { db } = await identity(admin);
     const { error: rate } = await db.rpc("consume_rate_limit");
     if (rate) throw new Error(rate.message);
@@ -36,13 +41,23 @@ export async function POST(request: Request) {
         args = { p_order: c.order };
         break;
       case "checkout":
-        name = "checkout";
+        name = "checkout_session";
         args = {
-          p_slot: c.slot,
+          p_session: c.session,
+          p_pickup_time: c.pickup_time,
+          p_expected_pickup_at: c.expected_pickup_at,
           p_method: c.method,
           p_key: c.key,
           p_note: c.note,
         };
+        break;
+      case "session_start":
+        name = "session_start";
+        args = { p_key: c.key };
+        break;
+      case "session_end":
+        name = "session_end";
+        args = { p_session: c.session };
         break;
       case "order":
         name = "order_command";

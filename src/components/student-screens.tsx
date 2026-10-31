@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import {
   eventLabels,
-  availableSlot,
+  openSession,
   dateTime,
   lineTotal,
   money,
@@ -40,7 +40,7 @@ import {
 import { Back, type AppContext } from "./app";
 import { PushPreferences } from "./notifications";
 import { useServerClock } from "@/hooks/use-server-clock";
-import { formatWibTime } from "@/lib/time";
+import { usePickupPreview } from "@/hooks/use-pickup-preview";
 import { SessionTiming } from "./clock";
 export function ProductPhoto({ product }: { product: Product }) {
   const [failed, setFailed] = useState(false);
@@ -104,6 +104,7 @@ export function OrderCard({ o, admin = false }: { o: Order; admin?: boolean }) {
         </span>
       </div>
       <p className="muted small">{dateTime(o.created_at)}</p>
+      {o.pickup_at && <p className="small">Ambil {dateTime(o.pickup_at)}</p>}
       <p>
         {o.order_items
           .map((i) => `${i.product_name_snapshot} ×${i.quantity}`)
@@ -148,25 +149,31 @@ export function StudentScreens({
   return <About />;
 }
 function PickupSummary({ data }: { data: Data }) {
-  const { now } = useServerClock();
-  const next = data.slots.find((s) => availableSlot(s, now));
+  const session = data.sessions.find(openSession);
   return (
     <section className="store-strip">
       <div>
-        <span className="eyebrow">Ambil saat istirahat</span>
+        <span className="eyebrow">Sesi kantin</span>
         <strong>
-          {next?.title ||
-            (now === null ? "Menyinkronkan waktu…" : "Belum ada sesi tersedia")}
+          {session ? "Sesi sedang berlangsung" : "Belum ada sesi terbuka"}
         </strong>
-        <span className="small muted">
-          {next
-            ? `${dateTime(next.starts_at)} – ${formatWibTime(next.ends_at)} WIB`
-            : "Jadwal pengambilan akan diatur kantin."}
-        </span>
-        {next && <SessionTiming slot={next} />}
+        {session ? (
+          <>
+            <span className="small muted">
+              Dimulai {dateTime(session.starts_at)}
+            </span>
+            <SessionTiming session={session} />
+          </>
+        ) : (
+          <span className="small muted">
+            Tunggu admin memulai sesi untuk memesan.
+          </span>
+        )}
       </div>
-      <span className={"badge " + (data.settings.open ? "open" : "")}>
-        {data.settings.open ? "Kantin buka" : "Kantin tutup"}
+      <span
+        className={"badge " + (data.settings.open && session ? "open" : "")}
+      >
+        {data.settings.open && session ? "Kantin buka" : "Kantin tutup"}
       </span>
     </section>
   );
@@ -531,7 +538,7 @@ function Cart({ context }: { context: AppContext }) {
               <strong>{money(total)}</strong>
             </div>
             <Link className="button full space-top" href="/checkout">
-              Pilih sesi pengambilan
+              Pilih jam pengambilan
               <ChevronRight size={18} />
             </Link>
           </div>
@@ -543,13 +550,20 @@ function Cart({ context }: { context: AppContext }) {
 function Checkout({ context: { data, busy, run } }: { context: AppContext }) {
   const router = useRouter();
   const { now, getNow } = useServerClock();
-  const [slot, setSlot] = useState(""),
+  const [pickupTime, setPickupTime] = useState(""),
     [method, setMethod] = useState<"cash" | "qris_static">("cash"),
     [note, setNote] = useState(""),
     [key, setKey] = useState(""),
     [error, setError] = useState("");
-  const slots = data.slots.filter((s) => availableSlot(s, now));
-  const selected = slots.find((s) => s.id === slot);
+  const session = data.sessions.find(openSession);
+  const {
+    preview,
+    error: previewError,
+    pending,
+    retry,
+  } = usePickupPreview(pickupTime, session?.id);
+  const previewExpired =
+    !!preview && now !== null && Date.parse(preview.pickup_at) <= now;
   /* eslint-disable react-hooks/set-state-in-effect -- Restore the durable checkout key from browser session storage after hydration. */
   useEffect(() => {
     let k = crypto.randomUUID();
@@ -574,20 +588,26 @@ function Checkout({ context: { data, busy, run } }: { context: AppContext }) {
     e.preventDefault();
     setError("");
     try {
-      // Re-read the current instant, not the last rendered second. SQL still
-      // rechecks cutoff/capacity after taking the authoritative database lock.
       const current = getNow();
-      const candidate = data.slots.find((s) => s.id === slot);
-      if (current === null)
-        throw new Error(
-          "Waktu belum tersinkron. Tunggu sebentar lalu coba lagi.",
-        );
-      if (!candidate || !availableSlot(candidate, current))
-        throw new Error(
-          "Sesi penuh atau batas pesan sudah lewat. Pilih sesi lain.",
-        );
+      if (!session)
+        throw new Error("Sesi sudah berakhir. Tunggu sesi baru dari admin.");
+      if (
+        current === null ||
+        !preview ||
+        pending ||
+        Date.parse(preview.pickup_at) <= current
+      )
+        throw new Error("Periksa ulang jam pengambilan sebelum memesan.");
       const id = await run(
-        { type: "checkout", slot, method, key, note },
+        {
+          type: "checkout",
+          session: session.id,
+          pickup_time: pickupTime,
+          expected_pickup_at: preview.pickup_at,
+          method,
+          key,
+          note,
+        },
         "Pesanan tersimpan.",
       );
       try {
@@ -612,41 +632,68 @@ function Checkout({ context: { data, busy, run } }: { context: AppContext }) {
         <form onSubmit={(e) => void submit(e)} className="checkout-grid">
           <section className="form-stack">
             <div className="panel">
-              <h2>Ambil saat istirahat</h2>
+              <h2>Waktu pengambilan</h2>
               <p className="small muted">
                 <MapPin size={16} />
                 {data.settings.pickup_location}
               </p>
-              <label>
-                Pilih sesi pengambilan
-                <select
-                  required
-                  value={selected?.id || ""}
-                  disabled={now === null}
-                  onChange={(e) => setSlot(e.target.value)}
-                >
-                  <option value="">Pilih sesi</option>
-                  {slots.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.title} · {dateTime(s.starts_at)} · sisa{" "}
-                      {s.capacity - s.reserved_count}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {selected && <SessionTiming slot={selected} />}
-              {slot && !selected && now !== null && (
-                <p className="message" role="status">
-                  Sesi pilihanmu sudah tidak tersedia. Pilih sesi lain.
+              {session ? (
+                <>
+                  <SessionTiming session={session} />
+                  <label>
+                    Jam pengambilan (WIB)
+                    <input
+                      type="time"
+                      step="60"
+                      required
+                      value={pickupTime}
+                      onChange={(e) => setPickupTime(e.target.value)}
+                    />
+                  </label>
+                  <p className="small muted">
+                    Pilih jam dalam format HH:mm. Jam yang sudah lewat hari ini
+                    dijadwalkan besok WIB. Tanggal ditentukan server.
+                  </p>
+                  {pending && (
+                    <p className="small muted" role="status">
+                      Memeriksa waktu pengambilan...
+                    </p>
+                  )}
+                  {preview && (
+                    <p className="small" role="status">
+                      Pengambilan:{" "}
+                      <strong>{dateTime(preview.pickup_at)}</strong>
+                    </p>
+                  )}
+                  {previewError && (
+                    <p className="message error" role="alert">
+                      {previewError}
+                    </p>
+                  )}
+                  {previewExpired && (
+                    <p className="message" role="status">
+                      Jam pengambilan sudah lewat. Periksa ulang sebelum
+                      memesan.
+                    </p>
+                  )}
+                  {!!pickupTime && (
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={pending}
+                      onClick={retry}
+                    >
+                      Periksa ulang jam
+                    </button>
+                  )}
+                  {now === null && (
+                    <p className="small muted">Menyinkronkan jam WIB...</p>
+                  )}
+                </>
+              ) : (
+                <p className="message">
+                  Belum ada sesi terbuka. Tunggu admin memulai sesi.
                 </p>
-              )}
-              {now === null && (
-                <p className="message" role="status">
-                  Menyinkronkan waktu pengambilan…
-                </p>
-              )}
-              {!slots.length && (
-                <p className="message">Belum ada sesi yang bisa dipesan.</p>
               )}
             </div>
             <fieldset className="panel">
@@ -725,7 +772,14 @@ function Checkout({ context: { data, busy, run } }: { context: AppContext }) {
               type="submit"
               className="full"
               disabled={
-                busy || !key || !selected || now === null || !data.settings.open
+                busy ||
+                !key ||
+                !session ||
+                !preview ||
+                pending ||
+                previewExpired ||
+                now === null ||
+                !data.settings.open
               }
             >
               {busy ? "Menyimpan pesanan…" : "Pesan sekarang"}
@@ -865,7 +919,7 @@ export function Ticket({
       </>
     );
   const pay = o.payments[0],
-    slot = data.slots.find((s) => s.id === o.pickup_slot_id),
+    slot = data.sessions.find((s) => s.id === o.pickup_slot_id),
     code = data.tickets.find((t) => t.order_id === id)?.code,
     events = data.events.filter((e) => e.order_id === id),
     proofs = data.proofs.filter((p) => p.payment_id === pay?.id);
@@ -905,9 +959,13 @@ export function Ticket({
             {!admin && <strong>{code || "Memuat kode…"}</strong>}
             <p>
               {slot?.title || "Sesi pengambilan"} ·{" "}
-              {slot ? dateTime(slot.starts_at) : ""}
+              {o.pickup_at
+                ? dateTime(o.pickup_at)
+                : slot
+                  ? dateTime(slot.starts_at)
+                  : ""}
             </p>
-            {slot && <SessionTiming slot={slot} />}
+            {slot && <SessionTiming session={slot} />}
             <span className="small muted">
               <MapPin size={15} />
               {data.settings.pickup_location}

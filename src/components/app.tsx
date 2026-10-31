@@ -24,7 +24,8 @@ import type { Command, Data, Profile } from "@/lib/domain";
 import { StudentScreens } from "./student-screens";
 import { AdminScreens } from "./admin-screens";
 import { AdminSound } from "./notifications";
-import { WibClock } from "./clock";
+import { WibClock, SessionTiming } from "./clock";
+import { openSession } from "@/lib/domain";
 import { serverClock } from "@/hooks/use-server-clock";
 import { formatWibTime } from "@/lib/time";
 export type AppContext = {
@@ -198,6 +199,7 @@ export function App({ initialProfile }: { initialProfile: Profile }) {
   };
   const nav = admin ? adminNav : studentNav,
     cartCount = data?.cart.reduce((n, i) => n + i.quantity, 0) || 0;
+  const currentSession = data?.sessions.find(openSession);
   return (
     <div className={admin ? "app-shell admin-shell" : "app-shell"}>
       <header className="topbar">
@@ -211,6 +213,7 @@ export function App({ initialProfile }: { initialProfile: Profile }) {
             <small>{admin ? "Pengelola" : "Kantin sekolah"}</small>
           </Link>
           <WibClock />
+          {currentSession && <SessionTiming session={currentSession} compact />}
         </div>
         <div className="row">
           <span className="desktop-only muted">{initialProfile.full_name}</span>

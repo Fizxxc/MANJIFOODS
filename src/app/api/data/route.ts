@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     let oq = db
       .from("orders")
       .select(
-        "id,order_number,student_id,pickup_slot_id,status,payment_method,total_idr,created_at,updated_at,customer_note,acknowledged_at,order_items(*),payments(*)",
+        "id,order_number,student_id,pickup_slot_id,pickup_at,status,payment_method,total_idr,created_at,updated_at,customer_note,acknowledged_at,order_items(*),payments(*)",
         { count: "exact" },
       )
       .order("created_at", { ascending: false });
@@ -38,9 +38,10 @@ export async function GET(request: Request) {
       db.from("product_variants").select("*"),
       db
         .from("pickup_slots")
-        .select("*")
-        .gte("ends_at", new Date(Date.now() - 86400000).toISOString())
-        .order("starts_at"),
+        .select("id,title,starts_at,ends_at,session_mode,active,reserved_count")
+        .eq("session_mode", "manual")
+        .order("starts_at", { ascending: false })
+        .limit(50),
       db
         .from("cart_items")
         .select("id,product_id,variant_id,quantity,carts!inner(student_id)")
@@ -62,7 +63,7 @@ export async function GET(request: Request) {
       categories,
       products,
       variants,
-      slots,
+      sessions,
       cart,
       orders,
       notifications,
@@ -78,7 +79,7 @@ export async function GET(request: Request) {
         ? await db
             .from("orders")
             .select(
-              "id,order_number,student_id,pickup_slot_id,status,payment_method,total_idr,created_at,updated_at,customer_note,acknowledged_at,order_items(*),payments(*)",
+              "id,order_number,student_id,pickup_slot_id,pickup_at,status,payment_method,total_idr,created_at,updated_at,customer_note,acknowledged_at,order_items(*),payments(*)",
             )
             .is("acknowledged_at", null)
             .not("status", "in", "(completed,cancelled,rejected)")
@@ -89,14 +90,14 @@ export async function GET(request: Request) {
       throw new Error("Pengingat antrean belum dapat dimuat.");
     const slotIds = [
       ...new Set((orders.data ?? []).map((o) => o.pickup_slot_id)),
-    ].filter((id) => !slots.data?.some((s) => s.id === id));
+    ].filter((id) => !sessions.data?.some((s) => s.id === id));
     if (slotIds.length) {
       const history = await db
         .from("pickup_slots")
-        .select("*")
+        .select("id,title,starts_at,ends_at,session_mode,active,reserved_count")
         .in("id", slotIds);
       if (history.error) throw new Error("Sesi pesanan belum dapat dimuat.");
-      slots.data?.push(...history.data);
+      sessions.data?.push(...history.data);
     }
     const ids = (orders.data ?? []).map((o) => o.id);
     const [tickets, events, proofs] = ids.length
@@ -131,7 +132,7 @@ export async function GET(request: Request) {
         categories: categories.data,
         products: products.data,
         variants: variants.data,
-        slots: slots.data,
+        sessions: sessions.data,
         cart: cart.data,
         orders: orders.data,
         notifications: notifications.data,

@@ -13,17 +13,13 @@ Semua jam tampilan menggunakan `Asia/Jakarta`, format `HH:mm:ss`, dan label WIB.
 
 `useSyncExternalStore` memakai snapshot server konstan yang sama dengan render pertama saat hydration. Tidak ada pembacaan waktu perangkat saat render SSR, `suppressHydrationWarning`, atau reload halaman. Komponen jam terpisah dari root aplikasi agar seluruh katalog/board tidak dirender ulang hanya untuk perubahan detik.
 
-## Sesi dan validasi pengambilan
+## Sesi manual dan validasi pengambilan
 
-- Header siswa/admin menampilkan jam berjalan. `SessionTiming` menampilkan durasi sesi dan hitung mundur ke mulai/selesai pada ringkasan katalog, checkout, tiket dan editor/daftar sesi admin. Durasi dihitung dari selisih timestamp, bukan penghitung yang dikurangi setiap callback, dan tidak menjadi negatif atau kembali ke nol setelah 24 jam.
-- Katalog dan checkout mengevaluasi ulang ketersediaan setiap detik memakai waktu tersinkron. Sesi harus aktif, belum melewati cutoff/akhir dan masih memiliki kapasitas. Pilihan yang kedaluwarsa tidak lagi mengaktifkan tombol checkout. Submit membaca `getNow()` lagi sehingga cutoff dengan pecahan detik juga ditolak sebelum request checkout.
-- Database tetap menjadi otoritas: fungsi checkout pada migrasi 002 sudah memeriksa `cutoff_at <= clock_timestamp()` setelah mengunci sesi, berikut stok dan kapasitas. Jam browser, termasuk hasil sinkronisasi, tidak digunakan sebagai otoritas mutasi. Tidak ada perubahan migrasi atau aturan status pembayaran/pengambilan.
-- Input `datetime-local` admin selalu berarti WIB, termasuk detik. `parseWibDateTime` mengubahnya ke timestamp UTC dan menolak tanggal yang tidak valid/ternormalisasi, serta UI dan schema server memeriksa urutan cutoff/mulai/selesai. Timestamp lama yang tidak diubah mempertahankan presisi aslinya supaya edit kapasitas tidak mengubah jadwal sesi yang sudah memiliki reservasi.
-- Timestamp riwayat, pembaruan data, snooze pengingat dan tanggal laporan memakai WIB. Reminders tetap memerlukan gesture untuk audio; perubahan jam tidak memberikan jaminan audio/push baru.
+Admin memakai Mulai sesi/Akhiri sesi, tanpa editor tanggal, cutoff atau checkbox aktif. Timestamp database menjadi acuan durasi sesi; sesi terbuka tidak kedaluwarsa pada tengah malam. Siswa memilih HH:mm tanpa tanggal dan melihat pratinjau waktu hasil server. Migrasi 003 menghitung pickup_at dalam Asia/Jakarta, memeriksa ulang sesudah lock checkout, dan menolak perubahan tanggal dari pratinjau. Riwayat serta pembayaran dipertahankan. Kontrak dan rencana migrasi ada di [SESSIONS.md](SESSIONS.md).
 
 ## Pemeriksaan dan operasi
 
-Jalankan lint, typecheck, suite tes dan build; sesudah build jalankan `npm run test:security` untuk pemeriksaan HTTP produksi termasuk endpoint waktu dan placeholder SSR jam. `tests/clock.test.ts` menguji timer, latensi, lifecycle, reconnect, backoff, cutoff, zona waktu dan format. Tiga skenario Playwright baru di `tests/ui.spec.ts` memeriksa detik berjalan/jumlah request, cutoff tanpa refresh, dan input WIB pada browser berzona AS melalui UI harness yang ada.
+Jalankan lint, typecheck, suite tes dan build; sesudah build jalankan `npm run test:security` untuk pemeriksaan HTTP produksi termasuk endpoint waktu, placeholder SSR jam dan role sesi. Tes mencakup timer, latensi, lifecycle, reconnect, backoff, sesi lintas hari, HH:mm, zona waktu dan format. Skenario Playwright pada UI harness memeriksa detik berjalan/jumlah request, input jam ambil tanpa tanggal dan kontrol Start/End pada browser berzona AS.
 
 Pastikan jam host aplikasi dan PostgreSQL dipelihara oleh sinkronisasi waktu sistem/NTP. Akurasi akhir mengikuti jam server dan ketidaksimetrian latensi jaringan; hook bukan pengganti NTP dan tidak menjanjikan presisi jam atom. Verifikasi sleep/wake, browser/device dan proxy/CDN produksi secara langsung. Jangan menambahkan cache pada `/api/time`.
 

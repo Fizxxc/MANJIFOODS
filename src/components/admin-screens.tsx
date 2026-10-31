@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import {
   Plus,
@@ -15,13 +15,13 @@ import {
   terminal,
   type Category,
   type Product,
-  type Slot,
+  openSession,
   type Variant,
 } from "@/lib/domain";
 import { type AppContext } from "./app";
 import { Empty, OrderCard, Pagination, Ticket } from "./student-screens";
 import { SessionTiming } from "./clock";
-import { parseWibDateTime, wibDateTimeInput, wibDate } from "@/lib/time";
+import { wibDate } from "@/lib/time";
 import { useWibToday } from "@/hooks/use-server-clock";
 export function AdminScreens({
   context,
@@ -122,7 +122,7 @@ function Board({
               <OrderCard o={o} admin />
               <div className="queue-slot">
                 <span>
-                  {data.slots.find((s) => s.id === o.pickup_slot_id)?.title}
+                  {data.sessions.find((s) => s.id === o.pickup_slot_id)?.title}
                 </span>
                 {!o.acknowledged_at && (
                   <span className="badge">Belum ditinjau</span>
@@ -779,187 +779,84 @@ function Categories({ context: { data, busy, run } }: { context: AppContext }) {
   );
 }
 function Sessions({ context: { data, busy, run } }: { context: AppContext }) {
-  const [edit, setEdit] = useState<Slot | null | undefined>(undefined);
-  const [error, setError] = useState("");
+  const startKey = useRef<string | null>(null);
+  const current = data.sessions.find(openSession);
   return (
     <>
       <div className="section-title">
         <div>
-          <h1>Sesi pengambilan</h1>
+          <h1>Sesi kantin</h1>
           <p className="muted">
-            Jadwal dan input waktu menggunakan WIB (Asia/Jakarta).
+            Sesi tetap terbuka sampai diakhiri admin, termasuk setelah tengah
+            malam.
           </p>
         </div>
-        <button
-          onClick={() => {
-            setError("");
-            setEdit(null);
-          }}
-        >
-          <Plus size={18} />
-          Tambah sesi
-        </button>
       </div>
-      {edit !== undefined && (
-        <EditorShell title="Editor sesi" onClose={() => setEdit(undefined)}>
-          <form
-            key={edit?.id || "new"}
-            className="form-stack"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const f = new FormData(e.currentTarget);
-              setError("");
-              try {
-                const starts_at = parseWibDateTime(
-                  String(f.get("start")),
-                  edit?.starts_at,
-                );
-                const ends_at = parseWibDateTime(
-                  String(f.get("end")),
-                  edit?.ends_at,
-                );
-                const cutoff_at = parseWibDateTime(
-                  String(f.get("cutoff")),
-                  edit?.cutoff_at,
-                );
-                if (
-                  Date.parse(cutoff_at) > Date.parse(starts_at) ||
-                  Date.parse(starts_at) >= Date.parse(ends_at)
-                )
-                  throw new Error(
-                    "Batas pesan harus sebelum atau saat sesi dimulai; selesai harus setelah mulai.",
-                  );
-                void run({
-                  type: "slot",
-                  id: edit?.id || null,
-                  data: {
-                    title: String(f.get("title")),
-                    starts_at,
-                    ends_at,
-                    cutoff_at,
-                    capacity: Number(f.get("capacity")),
-                    active: f.get("active") === "on",
-                  },
-                })
-                  .then(() => setEdit(undefined))
-                  .catch(() => {});
-              } catch (error) {
-                setError(
-                  error instanceof Error
-                    ? error.message
-                    : "Waktu sesi tidak valid.",
-                );
-              }
-            }}
-          >
-            <div className="form-grid">
-              <label>
-                Nama sesi
-                <input
-                  name="title"
-                  required
-                  maxLength={80}
-                  defaultValue={edit?.title}
-                />
-              </label>
-              <label>
-                Mulai
-                <input
-                  type="datetime-local"
-                  step="1"
-                  name="start"
-                  required
-                  defaultValue={wibDateTimeInput(edit?.starts_at)}
-                />
-              </label>
-              <label>
-                Selesai
-                <input
-                  type="datetime-local"
-                  step="1"
-                  name="end"
-                  required
-                  defaultValue={wibDateTimeInput(edit?.ends_at)}
-                />
-              </label>
-              <label>
-                Batas pemesanan
-                <input
-                  type="datetime-local"
-                  step="1"
-                  name="cutoff"
-                  required
-                  defaultValue={wibDateTimeInput(edit?.cutoff_at)}
-                />
-              </label>
-              <label>
-                Kapasitas pesanan
-                <input
-                  type="number"
-                  min={Math.max(1, edit?.reserved_count || 0)}
-                  max={10000}
-                  name="capacity"
-                  required
-                  defaultValue={edit?.capacity ?? 30}
-                />
-              </label>
-            </div>
-            <label className="check">
-              <input
-                type="checkbox"
-                name="active"
-                defaultChecked={edit?.active ?? true}
-              />
-              Sesi aktif
-            </label>
-            {!!edit?.reserved_count && (
-              <p className="message">
-                Sesi sudah memiliki pesanan. Waktu tidak dapat diubah; kapasitas
-                tidak boleh di bawah jumlah reservasi.
-              </p>
-            )}
-            {error && (
-              <p className="message error" role="alert">
-                {error}
-              </p>
-            )}
-            <button disabled={busy} type="submit">
-              Simpan sesi
-            </button>
-          </form>
-        </EditorShell>
-      )}
-      <div className="management-list">
-        {data.slots.map((s) => (
-          <article className="panel" key={s.id}>
-            <div className="row between">
-              <h2>{s.title}</h2>
-              <button
-                className="secondary"
-                onClick={() => {
-                  setError("");
-                  setEdit(s);
-                }}
-              >
-                Edit
-              </button>
-            </div>
-            <p>
-              {dateTime(s.starts_at)} – {dateTime(s.ends_at)}
-            </p>
-            <SessionTiming slot={s} />
+      <section className="panel form-stack">
+        <h2>{current ? "Sesi aktif" : "Belum ada sesi terbuka"}</h2>
+        {current ? (
+          <>
+            <p>Dimulai {dateTime(current.starts_at)}</p>
+            <SessionTiming session={current} />
             <p className="small muted">
-              Batas pesan: {dateTime(s.cutoff_at)} · {s.reserved_count}/
-              {s.capacity} pesanan · {s.active ? "Aktif" : "Nonaktif"}
+              {current.reserved_count} pesanan pada sesi ini. Mengakhiri sesi
+              tidak membatalkan pesanan yang sudah masuk.
             </p>
-          </article>
-        ))}
+            <button
+              disabled={busy}
+              onClick={() =>
+                void run(
+                  { type: "session_end", session: current.id },
+                  "Sesi diakhiri. Pesanan yang sudah masuk tetap diproses.",
+                ).catch(() => {})
+              }
+            >
+              Akhiri sesi
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="small muted">
+              Mulai sesi untuk menerima pesanan. Waktu mulai dan selesai dicatat
+              otomatis oleh server.
+            </p>
+            <button
+              disabled={busy}
+              onClick={() => {
+                startKey.current ||= crypto.randomUUID();
+                void run(
+                  { type: "session_start", key: startKey.current },
+                  "Sesi dimulai.",
+                )
+                  .then(() => {
+                    startKey.current = null;
+                  })
+                  .catch(() => {});
+              }}
+            >
+              Mulai sesi
+            </button>
+          </>
+        )}
+      </section>
+      <h2 className="space-top">Riwayat sesi</h2>
+      <div className="management-list">
+        {data.sessions
+          .filter((s) => s.ends_at !== null)
+          .map((session) => (
+            <article className="panel" key={session.id}>
+              <h3>{session.title}</h3>
+              <p className="small muted">
+                Mulai {dateTime(session.starts_at)}
+                <br />
+                Selesai {dateTime(session.ends_at!)}
+              </p>
+              <SessionTiming session={session} />
+            </article>
+          ))}
       </div>
-      {!data.slots.length && (
-        <Empty
-          title="Belum ada sesi"
-          body="Buat sesi istirahat beserta kapasitas dan batas pemesanan."
-        />
+      {!data.sessions.some((s) => s.ends_at !== null) && (
+        <p className="muted">Belum ada sesi yang diakhiri.</p>
       )}
     </>
   );

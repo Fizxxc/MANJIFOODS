@@ -69,7 +69,8 @@ export default async function Page({
           </li>
           <li>Isi URL dan kunci publik Supabase serta URL aplikasi.</li>
           <li>
-            Terapkan migrasi 001 lalu 002. Ikuti README untuk membuat admin.
+            Terapkan migrasi 001, 002, lalu 003. Ikuti README untuk membuat
+            admin.
           </li>
         </ol>
         <p>Kredensial dan QRIS merchant diisi oleh pengelola.</p>

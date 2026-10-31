@@ -2,13 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   lineTotal,
   unitPrice,
-  availableSlot,
+  openSession,
   allowedTransition,
   validStaticQris,
   crc16,
   commandSchema,
   csvCell,
-  type Slot,
+  type Session,
 } from "../src/lib/domain";
 import { imageMime } from "../src/lib/uploads";
 export const fixtureQris = () => {
@@ -28,19 +28,19 @@ describe("business validation", () => {
     expect(() => unitPrice(100, -101)).toThrow();
     expect(() => unitPrice(1.5)).toThrow();
   });
-  it("enforces capacity, active flag, and strict cutoff", () => {
-    const slot = {
+  it("only manual sessions without an end timestamp accept orders", () => {
+    const session = {
+      session_mode: "manual",
       active: true,
-      cutoff_at: "2030-01-01T00:00:00Z",
-      ends_at: "2030-01-01T02:00:00Z",
-      capacity: 2,
-      reserved_count: 1,
-    } as Slot;
-    const t = Date.parse(slot.cutoff_at);
-    expect(availableSlot(slot, t - 1)).toBe(true);
-    expect(availableSlot(slot, t)).toBe(false);
-    expect(availableSlot({ ...slot, reserved_count: 2 }, t - 1)).toBe(false);
-    expect(availableSlot({ ...slot, active: false }, t - 1)).toBe(false);
+      starts_at: "2020-01-01T00:00:00Z",
+      ends_at: null,
+    } as Session;
+    expect(openSession(session)).toBe(true);
+    expect(openSession({ ...session, active: false })).toBe(false);
+    expect(openSession({ ...session, ends_at: "2030-01-01T00:00:00Z" })).toBe(
+      false,
+    );
+    expect(openSession({ ...session, session_mode: "scheduled" })).toBe(false);
   });
   it("only permits sequential order states", () => {
     expect(allowedTransition("pending", "confirmed")).toBe(true);

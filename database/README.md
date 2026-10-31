@@ -12,3 +12,7 @@ Recommended sequence:
 7. Test two students plus admin and concurrent checkout.
 
 Never run a blanket DROP on existing production tables. Do not blindly execute this starter on a live DB. Review PostgreSQL grants, schema permissions and SECURITY DEFINER search_path first.
+
+## Sesi manual saat ini
+
+Sesudah 001/002, terapkan `supabase/migrations/003_manual_sessions.sql`. Jangan reset atau ulang starter. Editor tanggal lama telah diganti Start/End; pesanan dan FK lama dipertahankan, kolom pickup_at dibackfill. Rencana migrasi/rollout dan kontrak jam ambil ada di [docs/SESSIONS.md](../docs/SESSIONS.md).
