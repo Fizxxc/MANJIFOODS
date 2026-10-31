@@ -28,6 +28,7 @@ import { WibClock, SessionTiming } from "./clock";
 import { openSession } from "@/lib/domain";
 import { serverClock } from "@/hooks/use-server-clock";
 import { formatWibTime } from "@/lib/time";
+import { parseDataResponse } from "@/lib/order-response";
 export type AppContext = {
   data: Data;
   busy: boolean;
@@ -85,10 +86,20 @@ export function App({ initialProfile }: { initialProfile: Profile }) {
         router.refresh();
         return;
       }
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error);
+      const json: unknown = await res.json().catch(() => {
+        throw new Error("Respons server tidak valid. Coba muat ulang.");
+      });
+      if (!res.ok)
+        throw new Error(
+          json &&
+            typeof json === "object" &&
+            "error" in json &&
+            typeof json.error === "string"
+            ? json.error
+            : "Data belum dapat dimuat. Coba lagi.",
+        );
       if (serial === generation.current) {
-        setData(json);
+        setData(parseDataResponse(json));
         setError("");
         const syncedAt = serverClock.getNow();
         if (syncedAt !== null) setLastSync(formatWibTime(syncedAt) + " WIB");

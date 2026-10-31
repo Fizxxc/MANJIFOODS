@@ -33,6 +33,7 @@ import {
   paymentLabels,
   terminal,
   unitPrice,
+  validStaticQris,
   type Order,
   type Product,
   type Data,
@@ -42,6 +43,7 @@ import { PushPreferences } from "./notifications";
 import { useServerClock } from "@/hooks/use-server-clock";
 import { usePickupPreview } from "@/hooks/use-pickup-preview";
 import { SessionTiming } from "./clock";
+import { StaticQris } from "./static-qris";
 export function ProductPhoto({ product }: { product: Product }) {
   const [failed, setFailed] = useState(false);
   if (!product.image_path || failed)
@@ -113,7 +115,7 @@ export function OrderCard({ o, admin = false }: { o: Order; admin?: boolean }) {
       <div className="row between">
         <span className="small">
           {o.payment_method === "cash" ? "Tunai" : "QRIS"} ·{" "}
-          {paymentLabels[pay?.status || "unpaid"]}
+          {pay ? paymentLabels[pay.status] : "Data pembayaran belum tersedia"}
         </span>
         <strong>
           {money(o.total_idr)} <ChevronRight size={16} />
@@ -715,7 +717,7 @@ function Checkout({ context: { data, busy, run } }: { context: AppContext }) {
                 <input
                   type="radio"
                   name="method"
-                  disabled={!data.settings.qris_payload}
+                  disabled={!validStaticQris(data.settings.qris_payload)}
                   checked={method === "qris_static"}
                   onChange={() => setMethod("qris_static")}
                 />
@@ -723,7 +725,7 @@ function Checkout({ context: { data, busy, run } }: { context: AppContext }) {
                 <span>
                   <strong>QRIS statis</strong>
                   <small>
-                    {data.settings.qris_payload
+                    {validStaticQris(data.settings.qris_payload)
                       ? "Masukkan nominal sendiri. Diverifikasi manual."
                       : "Belum tersedia dari pengelola."}
                   </small>
@@ -885,29 +887,8 @@ export function Ticket({
   const { data, busy, run, upload } = context,
     o = data.orders.find((o) => o.id === id),
     [reason, setReason] = useState(""),
-    [qr, setQr] = useState(""),
     [copied, setCopied] = useState(false),
     [reorderError, setReorderError] = useState("");
-  const payload = data.settings.qris_payload;
-  useEffect(() => {
-    if (!payload) return;
-    let active = true;
-    void import("qrcode")
-      .then((q) =>
-        q.toDataURL(payload, {
-          width: 320,
-          margin: 4,
-          errorCorrectionLevel: "M",
-        }),
-      )
-      .then((url) => {
-        if (active) setQr(url);
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [payload]);
   if (!o)
     return (
       <>
@@ -996,7 +977,11 @@ export function Ticket({
           </div>
           <p className="payment-state">
             {o.payment_method === "cash" ? "Tunai saat ambil" : "QRIS statis"} ·{" "}
-            <strong>{paymentLabels[pay?.status || "unpaid"]}</strong>
+            <strong>
+              {pay
+                ? paymentLabels[pay.status]
+                : "Data pembayaran belum tersedia"}
+            </strong>
           </p>
           {pay?.admin_note && (
             <p className="message small">
@@ -1005,28 +990,26 @@ export function Ticket({
           )}
         </section>
         <section className="form-stack">
+          {!pay && (
+            <p className="message error" role="alert">
+              Data pembayaran belum tersedia. Muat ulang atau hubungi kantin
+              sebelum membayar. Status transaksi tidak diubah.
+            </p>
+          )}
           {!admin &&
+            pay &&
             o.payment_method === "qris_static" &&
             !terminal.includes(o.status) &&
-            pay?.status !== "paid" && (
+            ["unpaid", "pending_verification", "rejected"].includes(
+              pay.status,
+            ) && (
               <div className="panel">
                 <h2>Bayar dengan QRIS</h2>
                 <p className="muted small">
                   Pindai QRIS merchant melalui aplikasi pembayaran. Masukkan
                   nominal persis seperti total tiket.
                 </p>
-                {qr ? (
-                  <img
-                    className="qris-image"
-                    src={qr}
-                    alt="QRIS statis merchant MANJI FOOD"
-                  />
-                ) : (
-                  <p className="message">
-                    QRIS belum dapat ditampilkan. Hubungi kantin; jangan
-                    membayar ke QR lain.
-                  </p>
-                )}
+                <StaticQris payload={data.settings.qris_payload} />
                 <div className="row between">
                   <strong>{money(o.total_idr)}</strong>
                   <button
@@ -1043,8 +1026,10 @@ export function Ticket({
                   </button>
                 </div>
                 <p className="message small">
-                  QRIS ini statis. Bukti gambar tidak membuktikan dana masuk.
-                  Admin memeriksa mutasi merchant sebelum menandai lunas.
+                  QRIS ini statis dan tidak memuat nominal pesanan. Masukkan
+                  total di aplikasi pembayaran. Bukti gambar tidak membuktikan
+                  dana masuk. Admin memeriksa mutasi merchant sebelum menandai
+                  lunas.
                 </p>
                 <label className="upload-label">
                   <Upload size={18} />
@@ -1080,16 +1065,21 @@ export function Ticket({
                 </button>
               </div>
             )}
-          {!admin && o.payment_method === "cash" && pay?.status !== "paid" && (
-            <div className="panel">
-              <Banknote size={25} />
-              <h2>Tunai saat ambil</h2>
-              <p>
-                Siapkan {money(o.total_idr)} dan tunjukkan kode tiket kepada
-                petugas.
-              </p>
-            </div>
-          )}
+          {!admin &&
+            pay &&
+            o.payment_method === "cash" &&
+            ["unpaid", "pending_verification", "rejected"].includes(
+              pay.status,
+            ) && (
+              <div className="panel">
+                <Banknote size={25} />
+                <h2>Tunai saat ambil</h2>
+                <p>
+                  Siapkan {money(o.total_idr)} dan tunjukkan kode tiket kepada
+                  petugas.
+                </p>
+              </div>
+            )}
           {proofs.length > 0 && (
             <div className="panel">
               <h2>Bukti pembayaran</h2>
@@ -1130,6 +1120,7 @@ export function Ticket({
             </ol>
           </div>
           {!admin &&
+            pay &&
             ["pending", "confirmed"].includes(o.status) &&
             !["paid", "pending_verification"].includes(pay?.status) && (
               <details className="panel">

@@ -181,6 +181,16 @@ function OrderActions({
     [settlement, setSettlement] = useState(false);
   if (!o) return null;
   const pay = o.payments[0];
+  if (!pay)
+    return (
+      <section className="panel space-top">
+        <h2>Tindakan pengelola</h2>
+        <p className="message error" role="alert">
+          Data pembayaran belum tersedia. Muat ulang dan periksa catatan
+          transaksi sebelum melakukan tindakan. Status transaksi tidak diubah.
+        </p>
+      </section>
+    );
   const action = (
     a:
       | "verify_payment"

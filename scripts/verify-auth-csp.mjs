@@ -19,6 +19,18 @@ const users = new Map();
 const tokenUsers = new Map();
 const calls = [];
 let localOrigin;
+let paymentShape = "object";
+let dataFailure = false;
+const orderId = "77777777-7777-4777-8777-777777777777";
+const paymentFixture = {
+  id: "66666666-6666-4666-8666-666666666666",
+  method: "qris_static",
+  status: "pending_verification",
+  amount_idr: 12000,
+  merchant_reference: null,
+  admin_note: null,
+  verified_at: null,
+};
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -92,6 +104,91 @@ globalThis.fetch = async (input, init) => {
       class_name: "XI",
       notifications_enabled: false,
     });
+  }
+  if (
+    url.pathname.startsWith("/rest/v1/") &&
+    user &&
+    [
+      "categories",
+      "products",
+      "product_variants",
+      "pickup_slots",
+      "cart_items",
+      "orders",
+      "notifications",
+      "app_settings",
+      "pickup_tickets",
+      "order_events",
+      "payment_proofs",
+    ].includes(url.pathname.split("/").at(-1))
+  ) {
+    const table = url.pathname.split("/").at(-1);
+    if (dataFailure && table === "orders")
+      return json({ message: "private SQL connection detail" }, 500);
+    if (table === "orders") {
+      if (users.get(user.id).role === "student")
+        assert.equal(url.searchParams.get("student_id"), "eq." + user.id);
+      const order = {
+        id: orderId,
+        order_number: "MF-HTTP-TEST",
+        student_id: "11111111-1111-4111-8111-111111111111",
+        pickup_slot_id: "55555555-5555-4555-8555-555555555555",
+        pickup_at: "2030-01-01T17:05:00Z",
+        status: "pending",
+        payment_method: "qris_static",
+        total_idr: 12000,
+        created_at: "2030-01-01T16:55:00Z",
+        updated_at: "2030-01-01T16:55:00Z",
+        customer_note: null,
+        acknowledged_at: null,
+        order_items: [],
+        payments:
+          paymentShape === "null"
+            ? null
+            : paymentShape === "array"
+              ? [paymentFixture]
+              : paymentShape === "invalid"
+                ? "bad"
+                : paymentFixture,
+      };
+      return json(
+        url.searchParams.get("id") &&
+          url.searchParams.get("id") !== "eq." + orderId
+          ? []
+          : [order],
+      );
+    }
+    if (table === "app_settings")
+      return json({
+        value: {
+          open: true,
+          pickup_location: "HTTP test only",
+          hours: "",
+          qris_payload: "",
+        },
+      });
+    if (table === "pickup_slots")
+      return json([
+        {
+          id: "55555555-5555-4555-8555-555555555555",
+          title: "HTTP test session",
+          starts_at: "2030-01-01T16:00:00Z",
+          ends_at: null,
+          session_mode: "manual",
+          active: true,
+          reserved_count: 1,
+        },
+      ]);
+    if (table === "payment_proofs")
+      assert.equal(
+        url.searchParams.get("payment_id"),
+        "in.(" + paymentFixture.id + ")",
+      );
+    return json([]);
+  }
+  if (url.pathname === "/rest/v1/rpc/admin_queue_counts" && user) {
+    assert.equal(users.get(user.id).role, "admin");
+    return json({ pending: 1 });
   }
   if (url.pathname === "/rest/v1/rpc/consume_rate_limit" && user)
     return json(null);
@@ -268,6 +365,64 @@ try {
       assert.match(landingHtml, /--:--:--/);
       assert.match(landingHtml, /aria-label="Waktu WIB"/);
       if (!native) {
+        for (const shape of ["object", "array", "null"]) {
+          paymentShape = shape;
+          const detail = await send(`/api/data?page=0&order=${orderId}`, {
+            headers: { cookie: cookies },
+          });
+          assert.equal(detail.status, 200);
+          assert.match(detail.headers.get("cache-control"), /no-store/);
+          const data = await detail.json();
+          assert.deepEqual(
+            data.orders[0].payments,
+            shape === "null" ? [] : [paymentFixture],
+          );
+          if (role === "admin")
+            assert.deepEqual(
+              data.unacknowledgedOrders[0].payments,
+              data.orders[0].payments,
+            );
+          passed++;
+        }
+        for (const query of [
+          "page=-1",
+          "order=invalid",
+          "page=0&page=1",
+          "active=9",
+        ]) {
+          const invalidData = await send("/api/data?" + query, {
+            headers: { cookie: cookies },
+          });
+          assert.equal(invalidData.status, 400);
+          assert.equal((await invalidData.json()).code, "INVALID_QUERY");
+          passed++;
+        }
+        const absent = await send(
+          "/api/data?order=88888888-8888-4888-8888-888888888888",
+          { headers: { cookie: cookies } },
+        );
+        assert.equal(absent.status, 404);
+        passed++;
+        for (const fail of ["provider", "shape"]) {
+          dataFailure = fail === "provider";
+          paymentShape = "invalid";
+          const unavailable = await send("/api/data?page=0", {
+            headers: { cookie: cookies },
+          });
+          assert.equal(unavailable.status, 503);
+          const error = await unavailable.text();
+          assert.doesNotMatch(error, /SQL|payments|\.map|Zod/);
+          passed++;
+        }
+        dataFailure = false;
+        paymentShape = "object";
+        const report = await send("/api/reports?day=2030-01-01", {
+          headers: { cookie: cookies },
+        });
+        assert.equal(report.status, role === "admin" ? 200 : 403);
+        if (role === "admin")
+          assert.match(await report.text(), /pending_verification/);
+        passed++;
         const post = (path, body) =>
           send(path, {
             method: "POST",
@@ -352,7 +507,7 @@ try {
       calls.includes("/rest/v1/profiles"),
   );
   console.log(
-    `Production auth/CSP HTTP: ${passed} scenarios passed (real Next + SSR SDK; provider fixture, no hosted auth).`,
+    `Production auth/CSP/orders HTTP: ${passed} scenarios passed (real Next + SSR SDK; provider fixture, no hosted auth).`,
   );
 } catch (error) {
   failure = error;

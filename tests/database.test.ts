@@ -294,6 +294,56 @@ describe("actual migrations and RPC invariants in PostgreSQL (PGlite)", () => {
     expect(await scalar("select count(*)::int from orders")).toBe(1);
     expect(await scalar("select stock from products where id=$1", [P])).toBe(9);
   });
+  it("QRIS checkout/read-recovery retries preserve one order and the exact existing payment status", async () => {
+    await cart();
+    const key = crypto.randomUUID();
+    const id = await checkout(A, "qris_static", key);
+    for (const status of [
+      "unpaid",
+      "pending_verification",
+      "paid",
+      "rejected",
+      "refunded",
+    ]) {
+      await db.query(
+        "update payments set status=$1::public.payment_state where order_id=$2",
+        [status, id],
+      );
+      const before = await scalar(
+        "select to_jsonb(p) from payments p where order_id=$1",
+        [id],
+      );
+      // Simulate an HTTP response/render failure after a successful commit.
+      // Retrying the same command must return its ID, never recreate a payment.
+      expect(await checkout(A, "qris_static", key)).toBe(id);
+      expect(
+        await scalar("select to_jsonb(p) from payments p where order_id=$1", [
+          id,
+        ]),
+      ).toEqual(before);
+      expect(
+        await scalar("select count(*)::int from payments where order_id=$1", [
+          id,
+        ]),
+      ).toBe(1);
+    }
+    expect(await scalar("select count(*)::int from orders")).toBe(1);
+    expect(await scalar("select stock from products where id=$1", [P])).toBe(9);
+    expect(await scalar("select total_idr from orders where id=$1", [id])).toBe(
+      12000,
+    );
+    const settingsBefore = await scalar(
+      "select value from app_settings where key='store'",
+    );
+    await expect(
+      actor(A, (tx) =>
+        tx.query("select public.save_store(true,'Changed','',$1)", [qris()]),
+      ),
+    ).rejects.toThrow("admin");
+    expect(
+      await scalar("select value from app_settings where key='store'"),
+    ).toEqual(settingsBefore);
+  });
   it("preserves immutable item snapshots when catalog changes", async () => {
     await cart();
     const id = await checkout();

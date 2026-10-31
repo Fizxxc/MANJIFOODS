@@ -22,3 +22,13 @@
 - Stock reservation release for cancelled/rejected before kitchen work per explicit policy, never double release.
 - Do not count unpaid QRIS orders as paid revenue.
 - Audit every admin action, including cash collection and rejected payments.
+
+## Read contract and QRIS recovery
+
+`payments.order_id` is a UNIQUE foreign key: PostgREST embeds `payments` as an object or null, despite the plural relationship name. `src/lib/order-response.ts` normalizes that relationship to **`Payment[]` with zero or one validated record** before proof lookup, JSON serialization, React rendering and CSV export. Legacy array transports remain accepted. Missing records become an empty collection and a visible unavailable state, never an invented `unpaid` payment. Invalid statuses/amounts, duplicate relationship records or payment/order method/total mismatches fail safely without changing database state. React validates the HTTP read model as well.
+
+`GET /api/data` accepts `page` as an integer 0–10000 (default 0), optional `order` UUID, `active=0|1` and `group=pending|preparing|ready`. Explicit order lookup ignores pagination. Invalid/duplicate parameters return 400 `INVALID_QUERY`; a missing or RLS-hidden order returns the same 404 `ORDER_NOT_FOUND`; unavailable/invalid provider data returns a sanitized 503 `DATA_UNAVAILABLE`. Authentication remains 401 and admin-only access remains 403. Responses are private/no-store. All queries use the authenticated user's SSR client and existing RLS; student orders also have an explicit owner filter.
+
+Static QRIS is loaded from the existing Supabase `app_settings.store.qris_payload`, validated for TLV/static IDR format and CRC, then encoded verbatim into a PNG with a quiet zone. No order amount is inserted. The separate displayed/copyable amount is the persisted, server-calculated order total. Students must enter that amount and confirm the merchant in their payment app; only admin checks actual receipt and verifies payment. QR loading, rendering failure and retry do not submit any financial command. Changed payloads cannot leave an old QR image visible. Paid/refunded orders do not prompt a second payment. QRIS editing remains admin-only.
+
+This rendering fix requires **no database migration or data repair**. Do not reset the database, recreate payments, replay checkout with a new idempotency key, or change payment statuses to recover a failed display. Deploy the matching application build, reload existing tickets and reconcile actual merchant receipts through the existing audited admin flow. The merchant setting is current configuration, not a per-order payload snapshot; configuration changes affecting old unpaid tickets still require operational care.

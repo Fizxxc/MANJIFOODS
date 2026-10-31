@@ -1,19 +1,23 @@
 import { NextResponse } from "next/server";
 import { identity } from "@/lib/supabase/server";
-import { apiError } from "@/lib/security";
-import { uuid } from "@/lib/domain";
+import { HttpError, readApiError } from "@/lib/security";
+import {
+  normalizeOrders,
+  parseDataQuery,
+  parseDataResponse,
+} from "@/lib/order-response";
 export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   try {
     const { db, user, profile } = await identity();
     const url = new URL(request.url);
-    const page = Math.max(
-      0,
-      Math.min(10000, Math.floor(Number(url.searchParams.get("page")) || 0)),
-    );
-    const order = url.searchParams.get("order");
-    if (order && !uuid.safeParse(order).success)
-      throw new Error("ID pesanan tidak valid.");
+    let query;
+    try {
+      query = parseDataQuery(url.searchParams);
+    } catch (error) {
+      throw new HttpError(400, (error as Error).message, "INVALID_QUERY");
+    }
+    const { page, order, active, group } = query;
     let oq = db
       .from("orders")
       .select(
@@ -21,9 +25,11 @@ export async function GET(request: Request) {
         { count: "exact" },
       )
       .order("created_at", { ascending: false });
+    // The SSR client carries the user's JWT, never a service-role key. Keep
+    // an explicit owner filter in addition to orders/payments/proofs RLS.
+    if (profile.role !== "admin") oq = oq.eq("student_id", user.id);
     if (order) oq = oq.eq("id", order);
-    else if (url.searchParams.get("active") === "1") {
-      const group = url.searchParams.get("group");
+    else if (active === "1") {
       const states =
         group === "ready"
           ? ["ready"]
@@ -69,6 +75,13 @@ export async function GET(request: Request) {
       notifications,
       settings,
     ] = results;
+    const orderRows = normalizeOrders(orders.data);
+    if (order && orderRows.length === 0)
+      throw new HttpError(
+        404,
+        "Pesanan tidak ditemukan atau tidak dapat diakses.",
+        "ORDER_NOT_FOUND",
+      );
     const queue =
       profile.role === "admin"
         ? await db.rpc("admin_queue_counts")
@@ -88,9 +101,10 @@ export async function GET(request: Request) {
         : { data: [], error: null };
     if (unacknowledged.error)
       throw new Error("Pengingat antrean belum dapat dimuat.");
-    const slotIds = [
-      ...new Set((orders.data ?? []).map((o) => o.pickup_slot_id)),
-    ].filter((id) => !sessions.data?.some((s) => s.id === id));
+    const reminderRows = normalizeOrders(unacknowledged.data);
+    const slotIds = [...new Set(orderRows.map((o) => o.pickup_slot_id))].filter(
+      (id) => !sessions.data?.some((s) => s.id === id),
+    );
     if (slotIds.length) {
       const history = await db
         .from("pickup_slots")
@@ -99,7 +113,8 @@ export async function GET(request: Request) {
       if (history.error) throw new Error("Sesi pesanan belum dapat dimuat.");
       sessions.data?.push(...history.data);
     }
-    const ids = (orders.data ?? []).map((o) => o.id);
+    const ids = orderRows.map((o) => o.id);
+    const paymentIds = orderRows.flatMap((o) => o.payments.map((p) => p.id));
     const [tickets, events, proofs] = ids.length
       ? await Promise.all([
           db.from("pickup_tickets").select("order_id,code").in("order_id", ids),
@@ -108,13 +123,12 @@ export async function GET(request: Request) {
             .select("*")
             .in("order_id", ids)
             .order("created_at"),
-          db
-            .from("payment_proofs")
-            .select("id,payment_id,storage_path")
-            .in(
-              "payment_id",
-              (orders.data ?? []).flatMap((o) => o.payments.map((p) => p.id)),
-            ),
+          paymentIds.length
+            ? db
+                .from("payment_proofs")
+                .select("id,payment_id,storage_path")
+                .in("payment_id", paymentIds)
+            : Promise.resolve({ data: [], error: null }),
         ])
       : [
           { data: [], error: null },
@@ -124,27 +138,27 @@ export async function GET(request: Request) {
     if (tickets.error || events.error || proofs.error)
       throw new Error("Detail pesanan belum dapat dimuat.");
     return NextResponse.json(
-      {
+      parseDataResponse({
         profile,
         queueCounts: queue.data,
-        unacknowledgedOrders: unacknowledged.data,
+        unacknowledgedOrders: reminderRows,
         email: user.email,
         categories: categories.data,
         products: products.data,
         variants: variants.data,
         sessions: sessions.data,
         cart: cart.data,
-        orders: orders.data,
+        orders: orderRows,
         notifications: notifications.data,
         settings: settings.data?.value,
         tickets: tickets.data,
         events: events.data,
         proofs: proofs.data,
         orderCount: orders.count ?? 0,
-      },
+      }),
       { headers: { "Cache-Control": "private, no-store" } },
     );
   } catch (error) {
-    return apiError(error);
+    return readApiError(error);
   }
 }

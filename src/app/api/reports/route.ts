@@ -1,6 +1,7 @@
 import { identity } from "@/lib/supabase/server";
-import { apiError } from "@/lib/security";
+import { HttpError, readApiError } from "@/lib/security";
 import { csvCell } from "@/lib/domain";
+import { normalizeOrders } from "@/lib/order-response";
 export async function GET(request: Request) {
   try {
     const { db } = await identity(true),
@@ -10,7 +11,7 @@ export async function GET(request: Request) {
       !/^\d{4}-\d{2}-\d{2}$/.test(day) ||
       Number.isNaN(Date.parse(day + "T00:00:00+07:00"))
     )
-      throw new Error("Tanggal tidak valid.");
+      throw new HttpError(400, "Tanggal tidak valid.", "INVALID_QUERY");
     const start = new Date(day + "T00:00:00+07:00"),
       end = new Date(start.getTime() + 86400000);
     const rows: unknown[][] = [
@@ -30,14 +31,15 @@ export async function GET(request: Request) {
       const { data, error } = await db
         .from("orders")
         .select(
-          "order_number,created_at,status,payment_method,total_idr,payments(status,merchant_reference)",
+          "id,order_number,student_id,pickup_slot_id,pickup_at,status,payment_method,total_idr,created_at,updated_at,customer_note,acknowledged_at,order_items(*),payments(*)",
         )
         .gte("created_at", start.toISOString())
         .lt("created_at", end.toISOString())
         .order("id")
         .range(offset, offset + 499);
       if (error) throw new Error("Laporan belum dapat dimuat.");
-      for (const o of data) {
+      const orders = normalizeOrders(data);
+      for (const o of orders) {
         const p = o.payments[0];
         rows.push([
           o.order_number,
@@ -50,7 +52,7 @@ export async function GET(request: Request) {
           p?.merchant_reference,
         ]);
       }
-      if (data.length < 500) break;
+      if (orders.length < 500) break;
       offset += 500;
     }
     return new Response(
@@ -64,6 +66,6 @@ export async function GET(request: Request) {
       },
     );
   } catch (error) {
-    return apiError(error);
+    return readApiError(error);
   }
 }
