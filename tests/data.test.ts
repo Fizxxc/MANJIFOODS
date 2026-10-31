@@ -73,6 +73,35 @@ beforeEach(() => {
   });
 });
 describe("production order response regression", () => {
+  it("finds a unique MF order number without changing ownership, ID or payment", async () => {
+    const number = fixture().orders[0].order_number;
+    const res = await GET(
+      new Request("http://localhost/api/data?page=3&number=" + number),
+    );
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.orders[0].id).toBe(fixture().orders[0].id);
+    expect(data.tickets).toEqual([]);
+    expect(calls).toContainEqual({
+      table: "orders",
+      method: "eq",
+      args: ["order_number", number],
+    });
+    expect(
+      calls.some((c) => c.table === "orders" && c.method === "range"),
+    ).toBe(false);
+    expect(calls.some((c) => c.table === "pickup_tickets")).toBe(false);
+  });
+  it.each([
+    "number=MF-invalid",
+    "number=MF-20261031-000001&number=MF-20261031-000002",
+    "order=77777777-7777-4777-8777-777777777777&number=MF-20261031-000001",
+  ])("rejects ambiguous/invalid MF lookup %s", async (query) => {
+    expect(
+      (await GET(new Request("http://localhost/api/data?" + query))).status,
+    ).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
   it("loads page=0&order with a PostgREST payment object", async () => {
     const res = await GET(
       new Request(

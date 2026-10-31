@@ -16,12 +16,13 @@
 
 ## Invariants
 - Immutable item-price snapshots and order final total.
-- Order completion requires validated pickup code and `paid` or recorded cash collection.
+- Order completion requires admin-confirmed handoff and `paid` or recorded cash collection. Since 004, the existing ticket is validated internally; no student/admin types a separate pickup code. See [ORDER_DETAILS.md](ORDER_DETAILS.md).
 - No client-side payment status update rights.
 - Only authorized admin server function verifies payment; transactional transition with conditional old state and idempotency.
 - Stock reservation release for cancelled/rejected before kitchen work per explicit policy, never double release.
 - Do not count unpaid QRIS orders as paid revenue.
 - Audit every admin action, including cash collection and rejected payments.
+- Order confirmation/rejection never changes payment status. Since 004, an admin can reject a pending/confirmed order with an audited reason even if payment is claimed/paid; reconcile actual receipts/refunds separately. Stock is released once.
 
 ## Read contract and QRIS recovery
 

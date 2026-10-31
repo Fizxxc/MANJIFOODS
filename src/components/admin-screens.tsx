@@ -1,18 +1,10 @@
 "use client";
 import { useRef, useState } from "react";
 import Link from "next/link";
-import {
-  Plus,
-  Check,
-  ArrowRight,
-  Download,
-  Upload,
-  Search,
-} from "lucide-react";
+import { Plus, ArrowRight, Download, Upload, Search } from "lucide-react";
 import {
   dateTime,
   money,
-  terminal,
   type Category,
   type Product,
   openSession,
@@ -20,6 +12,8 @@ import {
 } from "@/lib/domain";
 import { type AppContext } from "./app";
 import { Empty, OrderCard, Pagination, Ticket } from "./student-screens";
+import { OrderActions } from "./order-actions";
+import { orderPath } from "@/lib/order-links";
 import { SessionTiming } from "./clock";
 import { wibDate } from "@/lib/time";
 import { useWibToday } from "@/hooks/use-server-clock";
@@ -35,7 +29,7 @@ export function AdminScreens({
     return (
       <>
         <Ticket context={context} id={path.split("/")[3]} admin />
-        <OrderActions context={context} id={path.split("/")[3]} />
+        <OrderActions context={context} identifier={path.split("/")[3]} />
       </>
     );
   if (path === "/admin/products") return <Products context={context} />;
@@ -46,15 +40,7 @@ export function AdminScreens({
   return <StoreSettings context={context} />;
 }
 function Board({
-  context: {
-    data,
-    busy,
-    run,
-    queueTab: tab,
-    setQueueTab: setTab,
-    page,
-    setPage,
-  },
+  context: { data, queueTab: tab, setQueueTab: setTab, page, setPage },
 }: {
   context: AppContext;
 }) {
@@ -108,54 +94,15 @@ function Board({
         />
       </label>
       <div className="queue-grid">
-        {list.map((o) => {
-          const next =
-            o.status === "pending"
-              ? "confirmed"
-              : o.status === "confirmed"
-                ? "preparing"
-                : o.status === "preparing"
-                  ? "ready"
-                  : null;
-          return (
-            <article className="queue-ticket" key={o.id}>
-              <OrderCard o={o} admin />
-              <div className="queue-slot">
-                <span>
-                  {data.sessions.find((s) => s.id === o.pickup_slot_id)?.title}
-                </span>
-                {!o.acknowledged_at && (
-                  <span className="badge">Belum ditinjau</span>
-                )}
-              </div>
-              {next ? (
-                <button
-                  className="full"
-                  disabled={busy}
-                  onClick={() =>
-                    void run({
-                      type: "order",
-                      order: o.id,
-                      action: next as "confirmed" | "preparing" | "ready",
-                    }).catch(() => {})
-                  }
-                >
-                  {next === "confirmed"
-                    ? "Terima pesanan"
-                    : next === "preparing"
-                      ? "Mulai siapkan"
-                      : "Tandai siap diambil"}
-                  <ArrowRight size={18} />
-                </button>
-              ) : (
-                <Link className="button full" href={"/admin/orders/" + o.id}>
-                  Verifikasi pengambilan
-                  <Check size={18} />
-                </Link>
-              )}
-            </article>
-          );
-        })}
+        {list.map((o) => (
+          <article className="queue-ticket" key={o.id}>
+            <OrderCard o={o} admin />
+            <Link className="button full" href={orderPath(o, true)}>
+              Buka pesanan
+              <ArrowRight size={18} />
+            </Link>
+          </article>
+        ))}
       </div>
       {!list.length && (
         <Empty
@@ -165,208 +112,6 @@ function Board({
       )}
       <Pagination page={page} setPage={setPage} count={data.orderCount} />
     </>
-  );
-}
-function OrderActions({
-  context: { data, busy, run },
-  id,
-}: {
-  context: AppContext;
-  id: string;
-}) {
-  const o = data.orders.find((o) => o.id === id),
-    [note, setNote] = useState(""),
-    [code, setCode] = useState(""),
-    [ref, setRef] = useState(""),
-    [settlement, setSettlement] = useState(false);
-  if (!o) return null;
-  const pay = o.payments[0];
-  if (!pay)
-    return (
-      <section className="panel space-top">
-        <h2>Tindakan pengelola</h2>
-        <p className="message error" role="alert">
-          Data pembayaran belum tersedia. Muat ulang dan periksa catatan
-          transaksi sebelum melakukan tindakan. Status transaksi tidak diubah.
-        </p>
-      </section>
-    );
-  const action = (
-    a:
-      | "verify_payment"
-      | "collect_cash"
-      | "reject_payment"
-      | "refund"
-      | "reject"
-      | "cancel"
-      | "completed"
-      | "acknowledge",
-  ) =>
-    void run({
-      type: "order",
-      order: id,
-      action: a,
-      note,
-      code,
-      reference: ref,
-    })
-      .then(() => {
-        setSettlement(false);
-        setCode("");
-      })
-      .catch(() => {});
-  return (
-    <section className="panel space-top">
-      <h2>Tindakan pengelola</h2>
-      <p className="small muted">
-        Setiap tindakan dicatat. Bukti transfer hanya pendukung; cocokkan
-        jumlah, waktu, dan referensi pada mutasi merchant.
-      </p>
-      <div className="form-grid">
-        <label>
-          Referensi mutasi / pengembalian
-          <input
-            value={ref}
-            onChange={(e) => setRef(e.target.value)}
-            maxLength={120}
-          />
-        </label>
-        <label>
-          Catatan / alasan
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            maxLength={500}
-          />
-        </label>
-      </div>
-      {pay?.status !== "paid" && pay?.status !== "refunded" && (
-        <>
-          <label className="check space-top">
-            <input
-              type="checkbox"
-              checked={settlement}
-              onChange={(e) => setSettlement(e.target.checked)}
-            />
-            {o.payment_method === "cash"
-              ? "Saya sudah menerima uang tunai sesuai total."
-              : "Saya sudah mencocokkan dana masuk nyata di mutasi merchant."}
-          </label>
-          <div className="row wrap space-top">
-            <button
-              disabled={
-                busy ||
-                !settlement ||
-                (o.payment_method === "qris_static" && ref.trim().length < 3) ||
-                (terminal.includes(o.status) && note.trim().length < 10)
-              }
-              onClick={() =>
-                action(
-                  o.payment_method === "cash"
-                    ? "collect_cash"
-                    : "verify_payment",
-                )
-              }
-            >
-              {o.payment_method === "cash"
-                ? "Catat uang tunai diterima"
-                : "Verifikasi pembayaran QRIS"}
-            </button>
-            {o.payment_method === "qris_static" && (
-              <button
-                className="secondary"
-                disabled={busy || note.trim().length < 3}
-                onClick={() => action("reject_payment")}
-              >
-                Tolak klaim pembayaran
-              </button>
-            )}
-          </div>
-        </>
-      )}
-      {o.status === "ready" && (
-        <div className="pickup-action">
-          <label>
-            Kode pengambilan dari siswa
-            <input
-              autoComplete="off"
-              value={code}
-              onChange={(e) => setCode(e.target.value.toUpperCase())}
-              maxLength={10}
-              placeholder="10 karakter pada tiket"
-            />
-          </label>
-          <button
-            disabled={busy || pay?.status !== "paid" || code.length !== 10}
-            onClick={() => action("completed")}
-          >
-            Verifikasi & selesaikan
-          </button>
-          <p className="small muted">
-            Pembayaran lunas dan kode yang cocok wajib sebelum pesanan selesai.
-          </p>
-        </div>
-      )}
-      <div className="row wrap space-top">
-        {!o.acknowledged_at && (
-          <button
-            className="secondary"
-            disabled={busy}
-            onClick={() => action("acknowledge")}
-          >
-            Sudah ditinjau
-          </button>
-        )}
-        {["pending", "confirmed"].includes(o.status) &&
-          !["paid", "pending_verification"].includes(pay?.status) && (
-            <>
-              <button
-                className="secondary"
-                disabled={busy || note.trim().length < 3}
-                onClick={() => action("reject")}
-              >
-                Tolak pesanan
-              </button>
-              <button
-                className="secondary"
-                disabled={busy || note.trim().length < 3}
-                onClick={() => action("cancel")}
-              >
-                Batalkan pesanan
-              </button>
-            </>
-          )}
-      </div>
-      {pay?.status === "paid" && o.status !== "completed" && (
-        <details className="space-top">
-          <summary>Rekonsiliasi / pengembalian dana</summary>
-          <p className="message">
-            Lakukan pengembalian dana nyata di luar aplikasi terlebih dahulu.
-            Isi referensi pengembalian dan catatan minimal 10 karakter di atas.
-          </p>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={settlement}
-              onChange={(e) => setSettlement(e.target.checked)}
-            />
-            Dana sudah benar-benar dikembalikan ke pembayar.
-          </label>
-          <button
-            className="secondary space-top"
-            disabled={
-              busy ||
-              !settlement ||
-              note.trim().length < 10 ||
-              ref.trim().length < 3
-            }
-            onClick={() => action("refund")}
-          >
-            Catat dana dikembalikan
-          </button>
-        </details>
-      )}
-    </section>
   );
 }
 function EditorShell({

@@ -4,6 +4,8 @@ import { App } from "@/components/app";
 import { AuthForm } from "@/components/auth-form";
 import Link from "next/link";
 import { Reload } from "@/components/reload";
+import { orderNumberPattern } from "@/lib/order-links";
+import { uuid } from "@/lib/domain";
 export const dynamic = "force-dynamic";
 const authRoutes = ["login", "register", "forgot-password", "reset-password"];
 const studentRoutes = [
@@ -31,6 +33,7 @@ export default async function Page({
   params: Promise<{ path?: string[] }>;
 }) {
   const path = (await params).path?.join("/") || "";
+  const detail = /^(?:orders|pay|admin\/orders)\/([^/]+)$/.exec(path)?.[1];
   if (!path) {
     if (configured()) {
       let landing = "/login";
@@ -47,9 +50,10 @@ export default async function Page({
     !studentRoutes.includes(path) &&
     !adminRoutes.includes(path) &&
     !/^menu\/[^/]+$/.test(path) &&
-    !/^orders\/[0-9a-f-]{36}$/.test(path) &&
-    !/^pay\/[0-9a-f-]{36}$/.test(path) &&
-    !/^admin\/orders\/[0-9a-f-]{36}$/.test(path)
+    !(
+      detail &&
+      (orderNumberPattern.test(detail) || uuid.safeParse(detail).success)
+    )
   )
     notFound();
   if (!configured())
@@ -69,7 +73,7 @@ export default async function Page({
           </li>
           <li>Isi URL dan kunci publik Supabase serta URL aplikasi.</li>
           <li>
-            Terapkan migrasi 001, 002, lalu 003. Ikuti README untuk membuat
+            Terapkan migrasi 001, 002, 003, lalu 004. Ikuti README untuk membuat
             admin.
           </li>
         </ol>

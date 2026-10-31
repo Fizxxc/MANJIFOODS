@@ -33,10 +33,10 @@
 [Not confirmed until actual settlement checked]
 ```
 ```
-/ORDERS/ORDER-ID
-[Ticket MF-XXXX]  [Payment separately]
+/ORDERS/MF-YYYYMMDD-XXXXXX
+[Existing MF order number]  [Payment separately]
 [Status] pending->confirmed->preparing->ready->completed
-[Pickup slot, verification code]
+[Pickup HH:mm WIB and location; no separate code/session dates/duration]
 [Ordered items and price snapshot]
 [Status and action history]
 ```
@@ -53,13 +53,13 @@
 [New (3)] [Preparing (5)] [Ready (2)] [Finished]
 [MF-001][Istirahat 1][QRIS: pending]
   Nasi Ayam x1, Es Teh x1     Rp16.000
-  [Open / verify transaction / accept]
+  [Open order]
 [MF-002][Istirahat 1][Cash: unpaid]
   Mie x1                      Rp10.000
-  [Open / accept]
+  [Open order]
 ```
 
-Admin operational detail: verified pay only after checking real merchant settlement. Pickup completion requests pickup code and verifies cash collection. Product editor includes photo, stock, category, visibility, optional variants. Session screen has Start Session / End Session only with server timestamps and live duration, no date editor/cutoff/active checkbox; one session remains open across midnight until explicitly ended. Settings retain location, descriptive hours, QRIS payload, push and sound. See docs/SESSIONS.md.
+Admin opens the MF detail before confirming/rejecting, with a confirmation dialog and rejection reason. Payment review is separate: private proof thumbnails open a zoomable modal; only actual receipt checked by admin permits marking paid. Pickup completion confirms paid handoff without typing a code. Historical records/tickets remain stored. See docs/ORDER_DETAILS.md. Product editors, session Start/End with live duration, and store/QRIS settings remain as specified in docs/SESSIONS.md.
 
 ## Routes (suggested)
 `/login`, `/register`, `/forgot-password`, `/menu`, `/menu/[slug]`, `/cart`, `/checkout`, `/orders`, `/orders/[id]`, `/profile`, `/profile/edit`, `/notifications`, `/about`, `/admin`, `/admin/orders/[id]`, `/admin/products`, `/admin/categories`, `/admin/payments`, `/admin/sessions`, `/admin/reports`, `/admin/settings`.

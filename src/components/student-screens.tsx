@@ -44,6 +44,11 @@ import { useServerClock } from "@/hooks/use-server-clock";
 import { usePickupPreview } from "@/hooks/use-pickup-preview";
 import { SessionTiming } from "./clock";
 import { StaticQris } from "./static-qris";
+import { OrderStatus } from "./order-status";
+import { PaymentProofs } from "./payment-proofs";
+import { ConfirmAction } from "./dialog";
+import { findOrder, orderPath } from "@/lib/order-links";
+import { formatWibTime } from "@/lib/time";
 export function ProductPhoto({ product }: { product: Product }) {
   const [failed, setFailed] = useState(false);
   if (!product.image_path || failed)
@@ -95,15 +100,10 @@ export function Empty({
 export function OrderCard({ o, admin = false }: { o: Order; admin?: boolean }) {
   const pay = o.payments[0];
   return (
-    <Link
-      href={(admin ? "/admin" : "") + "/orders/" + o.id}
-      className="order-card"
-    >
+    <Link href={orderPath(o, admin)} className="order-card">
       <div className="row between">
         <strong title={o.order_number}>{o.order_number}</strong>
-        <span className={"badge status-" + o.status}>
-          {orderLabels[o.status]}
-        </span>
+        <OrderStatus status={o.status} />
       </div>
       <p className="muted small">{dateTime(o.created_at)}</p>
       {o.pickup_at && <p className="small">Ambil {dateTime(o.pickup_at)}</p>}
@@ -885,7 +885,7 @@ export function Ticket({
 }) {
   const router = useRouter();
   const { data, busy, run, upload } = context,
-    o = data.orders.find((o) => o.id === id),
+    o = findOrder(data.orders, id),
     [reason, setReason] = useState(""),
     [copied, setCopied] = useState(false),
     [reorderError, setReorderError] = useState("");
@@ -901,8 +901,7 @@ export function Ticket({
     );
   const pay = o.payments[0],
     slot = data.sessions.find((s) => s.id === o.pickup_slot_id),
-    code = data.tickets.find((t) => t.order_id === id)?.code,
-    events = data.events.filter((e) => e.order_id === id),
+    events = data.events.filter((e) => e.order_id === o.id),
     proofs = data.proofs.filter((p) => p.payment_id === pay?.id);
   const reorder = async () => {
     setReorderError("");
@@ -918,39 +917,31 @@ export function Ticket({
   };
   return (
     <>
-      <Back href={admin ? "/admin" : "/orders"}>Tiket pesanan</Back>
+      <Back href={admin ? "/admin" : "/orders"}>Detail pesanan</Back>
       <div className="ticket-grid">
         <section className="ticket panel">
           <div className="row between">
             <span className="eyebrow">MANJI FOOD</span>
-            <span className={"badge status-" + o.status}>
-              {orderLabels[o.status]}
-            </span>
+            <OrderStatus status={o.status} events={events} detail />
           </div>
           <h1 className="ticket-number" title={o.order_number}>
             {o.order_number}
           </h1>
           <p className="small muted">{dateTime(o.created_at)}</p>
-          <div className="ticket-code">
-            <span className="eyebrow">
-              {admin
-                ? "Kode diverifikasi saat pengambilan"
-                : "Tunjukkan kode ini ke kantin"}
-            </span>
-            {!admin && <strong>{code || "Memuat kode…"}</strong>}
-            <p>
-              {slot?.title || "Sesi pengambilan"} ·{" "}
-              {o.pickup_at
-                ? dateTime(o.pickup_at)
-                : slot
-                  ? dateTime(slot.starts_at)
-                  : ""}
-            </p>
-            {slot && <SessionTiming session={slot} />}
+          <div className="order-pickup">
             <span className="small muted">
-              <MapPin size={15} />
+              <MapPin size={16} />
               {data.settings.pickup_location}
             </span>
+            {(o.pickup_at || slot?.starts_at) && (
+              <p>
+                Jam pengambilan{" "}
+                <strong>
+                  {formatWibTime(o.pickup_at || slot!.starts_at).slice(0, 5)}{" "}
+                  WIB
+                </strong>
+              </p>
+            )}
           </div>
           <div className="line-items">
             {o.order_items.map((i) => (
@@ -1054,7 +1045,7 @@ export function Ticket({
                   disabled={busy || pay?.status === "pending_verification"}
                   onClick={() =>
                     void run(
-                      { type: "order", order: id, action: "claim_payment" },
+                      { type: "order", order: o.id, action: "claim_payment" },
                       "Permintaan pemeriksaan terkirim.",
                     ).catch(() => {})
                   }
@@ -1075,31 +1066,12 @@ export function Ticket({
                 <Banknote size={25} />
                 <h2>Tunai saat ambil</h2>
                 <p>
-                  Siapkan {money(o.total_idr)} dan tunjukkan kode tiket kepada
+                  Siapkan {money(o.total_idr)} dan sebutkan nomor pesanan kepada
                   petugas.
                 </p>
               </div>
             )}
-          {proofs.length > 0 && (
-            <div className="panel">
-              <h2>Bukti pembayaran</h2>
-              {proofs.map((p, i) => (
-                <a
-                  key={p.id}
-                  className="text-link block"
-                  href={"/api/upload?proof=" + p.id}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Lihat bukti {i + 1}
-                  <ChevronRight size={16} />
-                </a>
-              ))}
-              <p className="small muted">
-                Tautan akses sementara, khusus pemilik pesanan dan admin.
-              </p>
-            </div>
-          )}
+          <PaymentProofs proofs={proofs} />
           <div className="panel">
             <h2>Perjalanan pesanan</h2>
             <ol className="timeline">
@@ -1133,20 +1105,24 @@ export function Ticket({
                     onChange={(e) => setReason(e.target.value)}
                   />
                 </label>
-                <button
+                <ConfirmAction
+                  title="Batalkan pesanan"
+                  label="Batalkan pesanan"
+                  description={`Pesanan ${o.order_number} akan dibatalkan. Tindakan ini tidak dapat dibatalkan.`}
+                  busy={busy}
+                  disabled={reason.trim().length < 3}
                   className="secondary space-top"
-                  disabled={busy || reason.trim().length < 3}
-                  onClick={() =>
-                    void run({
+                  onConfirm={() =>
+                    run({
                       type: "order",
-                      order: id,
+                      order: o.id,
                       action: "cancel",
                       note: reason,
-                    }).catch(() => {})
+                    })
                   }
                 >
                   Batalkan pesanan
-                </button>
+                </ConfirmAction>
               </details>
             )}
           {!admin && terminal.includes(o.status) && (

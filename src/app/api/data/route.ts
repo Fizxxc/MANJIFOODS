@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     } catch (error) {
       throw new HttpError(400, (error as Error).message, "INVALID_QUERY");
     }
-    const { page, order, active, group } = query;
+    const { page, order, number, active, group } = query;
     let oq = db
       .from("orders")
       .select(
@@ -29,6 +29,7 @@ export async function GET(request: Request) {
     // an explicit owner filter in addition to orders/payments/proofs RLS.
     if (profile.role !== "admin") oq = oq.eq("student_id", user.id);
     if (order) oq = oq.eq("id", order);
+    else if (number) oq = oq.eq("order_number", number);
     else if (active === "1") {
       const states =
         group === "ready"
@@ -76,7 +77,7 @@ export async function GET(request: Request) {
       settings,
     ] = results;
     const orderRows = normalizeOrders(orders.data);
-    if (order && orderRows.length === 0)
+    if ((order || number) && orderRows.length === 0)
       throw new HttpError(
         404,
         "Pesanan tidak ditemukan atau tidak dapat diakses.",
@@ -115,9 +116,8 @@ export async function GET(request: Request) {
     }
     const ids = orderRows.map((o) => o.id);
     const paymentIds = orderRows.flatMap((o) => o.payments.map((p) => p.id));
-    const [tickets, events, proofs] = ids.length
+    const [events, proofs] = ids.length
       ? await Promise.all([
-          db.from("pickup_tickets").select("order_id,code").in("order_id", ids),
           db
             .from("order_events")
             .select("*")
@@ -133,9 +133,8 @@ export async function GET(request: Request) {
       : [
           { data: [], error: null },
           { data: [], error: null },
-          { data: [], error: null },
         ];
-    if (tickets.error || events.error || proofs.error)
+    if (events.error || proofs.error)
       throw new Error("Detail pesanan belum dapat dimuat.");
     return NextResponse.json(
       parseDataResponse({
@@ -151,7 +150,7 @@ export async function GET(request: Request) {
         orders: orderRows,
         notifications: notifications.data,
         settings: settings.data?.value,
-        tickets: tickets.data,
+        tickets: [],
         events: events.data,
         proofs: proofs.data,
         orderCount: orders.count ?? 0,

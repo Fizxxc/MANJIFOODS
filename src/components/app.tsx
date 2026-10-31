@@ -29,6 +29,8 @@ import { openSession } from "@/lib/domain";
 import { serverClock } from "@/hooks/use-server-clock";
 import { formatWibTime } from "@/lib/time";
 import { parseDataResponse } from "@/lib/order-response";
+import { orderLookup, orderNumberPattern, orderPath } from "@/lib/order-links";
+import { subscribeOrderRefresh } from "@/lib/order-realtime";
 export type AppContext = {
   data: Data;
   busy: boolean;
@@ -72,9 +74,13 @@ export function App({ initialProfile }: { initialProfile: Profile }) {
     generation = useRef(0);
   const refresh = useCallback(async () => {
     const serial = ++generation.current;
-    const orderId = /\/(?:orders|pay)\/([0-9a-f-]{36})$/.exec(path)?.[1];
+    const orderId = orderLookup(path);
     const params = new URLSearchParams({ page: String(page) });
-    if (orderId) params.set("order", orderId);
+    if (orderId)
+      params.set(
+        orderNumberPattern.test(orderId) ? "number" : "order",
+        orderId,
+      );
     if (path === "/admin") {
       params.set("active", "1");
       params.set("group", queueTab);
@@ -137,27 +143,19 @@ export function App({ initialProfile }: { initialProfile: Profile }) {
   }, [refresh]);
   /* eslint-enable react-hooks/set-state-in-effect */
   useEffect(() => {
-    const db = browserClient();
-    const channel = db
-      .channel("inbox-" + initialProfile.id)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "notifications",
-          filter: "recipient_id=eq." + initialProfile.id,
-        },
-        () => void refresh(),
-      )
-      .subscribe((status) => {
-        setLive(status === "SUBSCRIBED");
-        if (status === "SUBSCRIBED") void refresh();
-      });
-    return () => {
-      void db.removeChannel(channel);
-    };
+    return subscribeOrderRefresh(
+      browserClient(),
+      initialProfile.id,
+      () => void refresh(),
+      setLive,
+    );
   }, [initialProfile.id, refresh]);
+  useEffect(() => {
+    const identifier = orderLookup(path);
+    if (!identifier || orderNumberPattern.test(identifier)) return;
+    const order = data?.orders.find((order) => order.id === identifier);
+    if (order) router.replace(orderPath(order, admin));
+  }, [data, path, router, admin]);
   useEffect(() => {
     if (!notice) return;
     const id = setTimeout(() => setNotice(""), 6500);
@@ -221,10 +219,12 @@ export function App({ initialProfile }: { initialProfile: Profile }) {
             className="wordmark"
           >
             manji<span>.</span> food
-            <small>{admin ? "Pengelola" : "Kantin sekolah"}</small>
+            <small>PESAN • AMBIL • NIKMATI</small>
           </Link>
           <WibClock />
-          {currentSession && <SessionTiming session={currentSession} compact />}
+          {currentSession && !orderLookup(path) && (
+            <SessionTiming session={currentSession} compact />
+          )}
         </div>
         <div className="row">
           <span className="desktop-only muted">{initialProfile.full_name}</span>

@@ -130,7 +130,7 @@ globalThis.fetch = async (input, init) => {
         assert.equal(url.searchParams.get("student_id"), "eq." + user.id);
       const order = {
         id: orderId,
-        order_number: "MF-HTTP-TEST",
+        order_number: "MF-20300101-000001",
         student_id: "11111111-1111-4111-8111-111111111111",
         pickup_slot_id: "55555555-5555-4555-8555-555555555555",
         pickup_at: "2030-01-01T17:05:00Z",
@@ -152,8 +152,10 @@ globalThis.fetch = async (input, init) => {
                 : paymentFixture,
       };
       return json(
-        url.searchParams.get("id") &&
-          url.searchParams.get("id") !== "eq." + orderId
+        (url.searchParams.get("id") &&
+          url.searchParams.get("id") !== "eq." + orderId) ||
+          (url.searchParams.get("order_number") &&
+            url.searchParams.get("order_number") !== "eq.MF-20300101-000001")
           ? []
           : [order],
       );
@@ -189,6 +191,23 @@ globalThis.fetch = async (input, init) => {
   if (url.pathname === "/rest/v1/rpc/admin_queue_counts" && user) {
     assert.equal(users.get(user.id).role, "admin");
     return json({ pending: 1 });
+  }
+  if (
+    ["/rest/v1/rpc/complete_order", "/rest/v1/rpc/reject_order"].includes(
+      url.pathname,
+    ) &&
+    user
+  ) {
+    assert.equal(users.get(user.id).role, "admin");
+    const body = JSON.parse(init.body);
+    assert.equal(body.p_order, orderId);
+    assert.deepEqual(
+      Object.keys(body).sort(),
+      url.pathname.endsWith("complete_order")
+        ? ["p_note", "p_order"]
+        : ["p_order", "p_reason"],
+    );
+    return json(null);
   }
   if (url.pathname === "/rest/v1/rpc/consume_rate_limit" && user)
     return json(null);
@@ -365,6 +384,39 @@ try {
       assert.match(landingHtml, /--:--:--/);
       assert.match(landingHtml, /aria-label="Waktu WIB"/);
       if (!native) {
+        const named = await send("/api/data?number=MF-20300101-000001", {
+          headers: { cookie: cookies },
+        });
+        assert.equal(named.status, 200);
+        assert.equal((await named.json()).orders[0].id, orderId);
+        passed++;
+        const namedPage = await send(
+          `${role === "admin" ? "/admin" : ""}/orders/MF-20300101-000001`,
+          { headers: { cookie: cookies } },
+        );
+        assert.equal(namedPage.status, 200);
+        assert.match(await namedPage.text(), /PESAN/);
+        passed++;
+        for (const action of ["reject", "completed"]) {
+          const response = await send("/api/command", {
+            method: "POST",
+            headers: {
+              origin: configuredOrigin,
+              cookie: cookies,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              type: "order",
+              order: orderId,
+              action,
+              note: "Valid test reason",
+              code: "unused",
+              reference: "unused",
+            }),
+          });
+          assert.equal(response.status, role === "admin" ? 200 : 403);
+          passed++;
+        }
         for (const shape of ["object", "array", "null"]) {
           paymentShape = shape;
           const detail = await send(`/api/data?page=0&order=${orderId}`, {

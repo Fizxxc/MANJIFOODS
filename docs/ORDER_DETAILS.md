@@ -1,0 +1,19 @@
+# Detail pesanan dan konfirmasi admin
+
+Tautan baru menggunakan `/orders/MF-YYYYMMDD-XXXXXX` dan `/admin/orders/MF-YYYYMMDD-XXXXXX`. Nomor yang ada tetap dipakai, tidak dibuat ulang. Tautan UUID lama masih dapat dibuka dan dinavigasikan ke nomor yang sama setelah data resmi dimuat. API menerima `number` sebagai alternatif terpisah untuk `order` UUID, dengan filter pemilik dan RLS yang sama; keduanya tidak boleh dipakai sekaligus.
+
+Detail menampilkan nomor MF, status pesanan, waktu ambil WIB, lokasi, item/total, pembayaran dan riwayat. Kode pengambilan terpisah dan tanggal/durasi sesi tidak ditampilkan. Clock WIB tetap tersedia. Data tiket lama dipertahankan di database, tetapi tidak lagi dikirim oleh `/api/data`.
+
+Admin membuka detail sebelum mengambil tindakan. Konfirmasi menerima pesanan tanpa kode/referensi dan tidak mengubah pembayaran. Penolakan membutuhkan alasan (3–500 karakter), dialog konfirmasi dan pengembalian stok tepat satu kali. Pembayaran tidak berubah, termasuk jika masih diklaim atau sudah lunas. Admin wajib merekonsiliasi dana masuk/pengembalian secara terpisah untuk pesanan ditolak yang memiliki pembayaran. Persiapan, siap dan penyelesaian tetap berurutan; penyelesaian hanya oleh admin setelah pembayaran lunas dan serah-terima, tanpa mengetik kode. Server memakai tiket yang sudah tersimpan untuk meneruskan pemeriksaan transisi lama. Dialog konfirmasi tidak mengirim perintah sebelum disetujui.
+
+Verifikasi QRIS berada di panel terpisah. Thumbnail bukti dibuka dalam dialog native dengan zoom 100–400%, Escape/tutup, scroll, dan tampilan penuh melalui endpoint privat yang sama. Referensi mutasi merchant hanya diperlukan untuk verifikasi pembayaran/pengembalian; bukan konfirmasi pesanan. Membuka bukti atau menerima pesanan tidak pernah menandai lunas. Hanya admin yang memeriksa penerimaan nyata dan mengonfirmasi verifikasi. QRIS statis dan total tetap mengikuti kontrak pembayaran yang ada.
+
+Status menggunakan Lucide dan permukaan kuning (menunggu), hijau (dikonfirmasi), merah (ditolak dengan alasan), serta gaya persiapan/siap/selesai yang sesuai. Animasi ikon berhenti pada `prefers-reduced-motion: reduce`. Header memakai `PESAN • AMBIL • NIKMATI`.
+
+## Rollout tanpa penghapusan data
+
+Untuk database yang sudah memiliki 001–003, backup dan tinjau staging, lalu terapkan **hanya** `supabase/migrations/004_order_details.sql` sebelum deploy aplikasi ini. Jangan reset database atau menjalankan ulang starter. Migrasi tidak memperbarui order/payment/ticket historis: menambah dua RPC admin dan tabel/trigger refresh privat. UI lama dan RPC lama tetap tersedia selama transisi. Untuk database baru, jalankan 001, 002, 003, 004 berurutan.
+
+`order_refresh` hanya menyimpan `recipient_id` dan counter. RLS membatasi setiap akun pada sinyal miliknya (termasuk admin). Trigger transaksi pada orders, payments, proofs dan events memberi sinyal ke pemilik dan admin. Hanya tabel kecil ini ditambahkan ke publication `supabase_realtime`; record finansial, kode/hash, proof path dan detail siswa tidak disiarkan. Client mengabaikan payload, menggabungkan burst 80ms, lalu mengambil data resmi dari API dengan JWT/RLS. Subscription notifikasi yang ada dipertahankan. Subscribe ulang, koneksi kembali, tab aktif dan polling menjadi jalur pemulihan; koneksi offline tidak dapat menjamin pembaruan seketika. Lihat [Supabase Postgres Changes](https://supabase.com/docs/guides/realtime/postgres-changes) untuk prasyarat Realtime/RLS.
+
+Sesudah deploy, verifikasi dengan dua browser akun berbeda: admin konfirmasi/tolak, alasan muncul di siswa, pembayaran tetap; unggah bukti muncul di admin dan modal tidak mengubah status; verifikasi dana nyata terpisah; ready/lunas dapat diselesaikan tanpa kode. Pastikan publication memuat `order_refresh` dan RLS tetap aktif. Migrasi hosted, pengiriman Realtime lintas perangkat dan penerimaan pembayaran aktual memerlukan acceptance tersendiri.

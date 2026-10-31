@@ -16,3 +16,5 @@ Never run a blanket DROP on existing production tables. Do not blindly execute t
 ## Sesi manual saat ini
 
 Sesudah 001/002, terapkan `supabase/migrations/003_manual_sessions.sql`. Jangan reset atau ulang starter. Editor tanggal lama telah diganti Start/End; pesanan dan FK lama dipertahankan, kolom pickup_at dibackfill. Rencana migrasi/rollout dan kontrak jam ambil ada di [docs/SESSIONS.md](../docs/SESSIONS.md).
+
+Sesudah 003, terapkan `supabase/migrations/004_order_details.sql` untuk UX detail/keputusan admin dan sinyal refresh Realtime privat. Tidak menghapus atau mengubah record historis. Untuk database berisi 001–003, jalankan hanya 004 sebelum deploy aplikasi baru; lihat [docs/ORDER_DETAILS.md](../docs/ORDER_DETAILS.md).

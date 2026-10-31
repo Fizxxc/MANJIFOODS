@@ -15,7 +15,7 @@ vi.mock("../src/lib/supabase/server", () => ({
 }));
 import { POST as command } from "../src/app/api/command/route";
 import { POST as auth } from "../src/app/api/auth/route";
-import { POST as upload } from "../src/app/api/upload/route";
+import { POST as upload, GET as viewProof } from "../src/app/api/upload/route";
 import { POST as pickupPreview } from "../src/app/api/pickup-time/route";
 import {
   assertOrigin,
@@ -56,6 +56,86 @@ beforeEach(() => {
   mocks.reset.mockResolvedValue({ error: null });
 });
 describe("HTTP command/auth boundary (mock transport, real validators)", () => {
+  it.each(["student", "admin"])(
+    "%s opens an authorized proof through a short-lived private signed URL only",
+    async (role) => {
+      const id = crypto.randomUUID();
+      const single = vi.fn().mockResolvedValue({
+        data: { storage_path: "private-owned-proof.png" },
+        error: null,
+      });
+      const eq = vi.fn(() => ({ single }));
+      const select = vi.fn(() => ({ eq }));
+      const from = vi.fn(() => ({ select }));
+      const sign = vi.fn().mockResolvedValue({
+        data: {
+          signedUrl: "https://fixture.example.invalid/proof?token=test",
+        },
+        error: null,
+      });
+      mocks.identity.mockResolvedValue({
+        profile: { role },
+        db: {
+          from,
+          storage: { from: vi.fn(() => ({ createSignedUrl: sign })) },
+        },
+      });
+      const res = await viewProof(
+        new Request(`${origin}/api/upload?proof=${id}`),
+      );
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toBe(
+        "https://fixture.example.invalid/proof?token=test",
+      );
+      expect(res.headers.get("cache-control")).toContain("no-store");
+      expect(sign).toHaveBeenCalledWith("private-owned-proof.png", 60);
+      expect(eq).toHaveBeenCalledWith("id", id);
+      single.mockResolvedValueOnce({ data: null, error: null });
+      expect(
+        (await viewProof(new Request(`${origin}/api/upload?proof=${id}`)))
+          .status,
+      ).toBe(404);
+      expect(sign).toHaveBeenCalledTimes(1);
+      mocks.identity.mockRejectedValueOnce(new Error("AUTH_REQUIRED"));
+      expect(
+        (await viewProof(new Request(`${origin}/api/upload?proof=${id}`)))
+          .status,
+      ).toBe(401);
+      expect(mocks.rpc).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["completed", "reject"])(
+    "%s uses an admin-only RPC without caller codes or references",
+    async (action) => {
+      const id = crypto.randomUUID();
+      const res = await command(
+        request({
+          type: "order",
+          order: id,
+          action,
+          note: "Alasan tindakan",
+          code: "ignored-code",
+          reference: "ignored-reference",
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(mocks.identity).toHaveBeenCalledWith(true);
+      expect(mocks.rpc).toHaveBeenLastCalledWith(
+        action === "completed" ? "complete_order" : "reject_order",
+        action === "completed"
+          ? { p_order: id, p_note: "Alasan tindakan" }
+          : { p_order: id, p_reason: "Alasan tindakan" },
+      );
+      mocks.identity.mockRejectedValueOnce(new Error("ADMIN_REQUIRED"));
+      expect(
+        (
+          await command(
+            request({ type: "order", order: id, action, note: "Alasan" }),
+          )
+        ).status,
+      ).toBe(403);
+    },
+  );
   it.each(["session_start", "session_end"])(
     "%s requires admin and accepts no caller timestamps",
     async (type) => {

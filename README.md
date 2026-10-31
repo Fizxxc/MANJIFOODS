@@ -26,6 +26,7 @@ Untuk proyek **baru/kosong**, jalankan sekali melalui SQL Editor Supabase, denga
 1. `supabase/migrations/001_initial_schema.sql` — salinan starter asli yang telah diperiksa.
 2. `supabase/migrations/002_operations.sql` — RPC transaksional, grants, RLS, storage, audit dan outbox.
 3. `supabase/migrations/003_manual_sessions.sql` — sesi Start/End, satu sesi terbuka dan resolusi jam ambil WIB. Lihat [rencana migrasi](docs/SESSIONS.md) untuk database berisi data.
+4. `supabase/migrations/004_order_details.sql` — detail nomor MF, serah-terima admin tanpa kode, penolakan terpisah dari pembayaran dan sinyal Realtime privat. Untuk database berisi 001–003, terapkan hanya 004; lihat [rollout detail pesanan](docs/ORDER_DETAILS.md).
 
 Jangan menjalankan kembali `database/001_initial_schema.sql` setelah migrasi 001. Untuk database yang sudah berisi tabel/aplikasi, bandingkan schema dan siapkan migrasi penyesuaian terlebih dahulu; file ini bukan skrip overwrite. Tidak ada migrasi hosted yang diterapkan oleh proses implementasi ini.
 

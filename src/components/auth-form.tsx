@@ -103,7 +103,7 @@ export function AuthForm({ mode }: { mode: string }) {
           waktunya makan.
         </h2>
         <p>Pilih menu kantin dan simpan tiket pengambilanmu di satu tempat.</p>
-        <span className="eyebrow">Kantin sekolah · Satu titik pengambilan</span>
+        <span className="eyebrow">PESAN • AMBIL • NIKMATI</span>
       </section>
       <section className="auth-card">
         <Link href="/menu" className="text-link">

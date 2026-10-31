@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { identity } from "@/lib/supabase/server";
-import { assertOrigin, apiError, boundedBody } from "@/lib/security";
+import {
+  assertOrigin,
+  apiError,
+  boundedBody,
+  HttpError,
+  readApiError,
+} from "@/lib/security";
 import { imageMime, imageExtensions } from "@/lib/uploads";
 import { uuid } from "@/lib/domain";
 export async function POST(request: Request) {
@@ -69,17 +75,28 @@ export async function GET(request: Request) {
   try {
     const { db } = await identity();
     const id = new URL(request.url).searchParams.get("proof");
-    if (!uuid.safeParse(id).success) throw new Error("ID bukti tidak valid.");
+    if (!uuid.safeParse(id).success)
+      throw new HttpError(400, "ID bukti tidak valid.", "INVALID_PROOF");
     const { data: proof } = await db
       .from("payment_proofs")
       .select("storage_path")
       .eq("id", id)
       .single();
-    if (!proof) throw new Error("Bukti tidak ditemukan atau akses ditolak.");
+    if (!proof)
+      throw new HttpError(
+        404,
+        "Bukti tidak ditemukan atau tidak dapat diakses.",
+        "PROOF_NOT_FOUND",
+      );
     const { data, error } = await db.storage
       .from("payment-proofs")
       .createSignedUrl(proof.storage_path, 60);
-    if (error) throw new Error("Bukti belum dapat dibuka.");
+    if (error || !data)
+      throw new HttpError(
+        503,
+        "Bukti belum dapat dibuka. Coba lagi.",
+        "PROOF_UNAVAILABLE",
+      );
     return NextResponse.redirect(data.signedUrl, {
       headers: {
         "Cache-Control": "private, no-store",
@@ -87,6 +104,6 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
-    return apiError(error);
+    return readApiError(error);
   }
 }

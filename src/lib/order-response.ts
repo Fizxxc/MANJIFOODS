@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Data, Order, Payment } from "./domain";
+import { orderNumberPattern } from "./order-links";
 
 const id = z.string().min(1);
 const amount = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -197,7 +198,7 @@ export function parseDataResponse(value: unknown): Data {
 }
 
 export function parseDataQuery(params: URLSearchParams) {
-  for (const key of ["page", "order", "active", "group"])
+  for (const key of ["page", "order", "number", "active", "group"])
     if (params.getAll(key).length > 1)
       throw new Error("Parameter berulang tidak diizinkan.");
   const parsed = z
@@ -209,13 +210,15 @@ export function parseDataQuery(params: URLSearchParams) {
         .refine((n) => n <= 10000)
         .default(0),
       order: z.uuid().optional(),
+      number: z.string().regex(orderNumberPattern).optional(),
       active: z.enum(["0", "1"]).optional(),
       group: z.enum(["pending", "preparing", "ready"]).optional(),
     })
+    .refine((query) => !(query.order && query.number))
     .safeParse(Object.fromEntries(params));
   if (!parsed.success)
     throw new Error(
-      "Parameter tidak valid: page 0–10000, order UUID, active 0/1, group pending/preparing/ready.",
+      "Parameter tidak valid: page 0–10000, order UUID atau number MF, active 0/1, group pending/preparing/ready.",
     );
   return parsed.data;
 }

@@ -19,7 +19,10 @@ export async function POST(request: Request) {
       "session_end",
       "store",
     ].includes(c.type);
-    const { db } = await identity(admin);
+    const { db } = await identity(
+      admin ||
+        (c.type === "order" && ["completed", "reject"].includes(c.action)),
+    );
     const { error: rate } = await db.rpc("consume_rate_limit");
     if (rate) throw new Error(rate.message);
     let name: string, args: Record<string, unknown>;
@@ -60,6 +63,16 @@ export async function POST(request: Request) {
         args = { p_session: c.session };
         break;
       case "order":
+        if (c.action === "reject") {
+          name = "reject_order";
+          args = { p_order: c.order, p_reason: c.note };
+          break;
+        }
+        if (c.action === "completed") {
+          name = "complete_order";
+          args = { p_order: c.order, p_note: c.note };
+          break;
+        }
         name = "order_command";
         args = {
           p_order: c.order,

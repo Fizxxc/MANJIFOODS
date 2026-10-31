@@ -135,6 +135,7 @@ beforeAll(async () => {
   );
   legacyBefore = await snapshotLegacy();
   await db.exec(sql("003_manual_sessions.sql"));
+  await db.exec(sql("004_order_details.sql"));
   legacyAfter = await snapshotLegacy();
   legacyPickupBackfilled = await scalar<boolean>(
     "select bool_and(o.pickup_at=s.starts_at) from orders o join pickup_slots s on s.id=o.pickup_slot_id",
@@ -172,9 +173,193 @@ beforeEach(async () => {
   );
 });
 describe("actual migrations and RPC invariants in PostgreSQL (PGlite)", () => {
-  it("003 preserves every original order/item/payment/session/ticket field and backfills pickup appointments", () => {
+  it("003/004 preserve every original order/item/payment/session/ticket field and backfill pickup appointments", () => {
     expect(legacyAfter).toEqual(legacyBefore);
     expect(legacyPickupBackfilled).toBe(true);
+  });
+  it("admin confirmation does not require a reference or modify payment", async () => {
+    await cart();
+    const id = await checkout(A, "qris_static");
+    const before = await scalar(
+      "select to_jsonb(p) from payments p where order_id=$1",
+      [id],
+    );
+    await command(id, "confirmed");
+    expect(await scalar("select status from orders where id=$1", [id])).toBe(
+      "confirmed",
+    );
+    expect(
+      await scalar("select to_jsonb(p) from payments p where order_id=$1", [
+        id,
+      ]),
+    ).toEqual(before);
+    await expect(command(id, "confirmed", B)).rejects.toThrow();
+  });
+  it.each(["unpaid", "pending_verification", "paid", "refunded"])(
+    "rejects an order without modifying its %s payment and restores stock once",
+    async (status) => {
+      await cart();
+      const id = await checkout(A, "qris_static");
+      await db.query(
+        "update payments set status=$1::public.payment_state where order_id=$2",
+        [status, id],
+      );
+      const before = await scalar(
+        "select to_jsonb(p) from payments p where order_id=$1",
+        [id],
+      );
+      await expect(
+        actor(A, (tx) =>
+          tx.query("select public.reject_order($1,'Stok tidak tersedia')", [
+            id,
+          ]),
+        ),
+      ).rejects.toThrow("admin");
+      await expect(
+        actor(ADMIN, (tx) =>
+          tx.query("select public.reject_order($1,'')", [id]),
+        ),
+      ).rejects.toThrow("Alasan");
+      await actor(ADMIN, (tx) =>
+        tx.query("select public.reject_order($1,'Stok tidak tersedia')", [id]),
+      );
+      await actor(ADMIN, (tx) =>
+        tx.query("select public.reject_order($1,'Retry alasan')", [id]),
+      );
+      expect(await scalar("select status from orders where id=$1", [id])).toBe(
+        "rejected",
+      );
+      expect(
+        await scalar("select to_jsonb(p) from payments p where order_id=$1", [
+          id,
+        ]),
+      ).toEqual(before);
+      expect(await scalar("select stock from products where id=$1", [P])).toBe(
+        10,
+      );
+      expect(
+        await scalar(
+          "select count(*)::int from order_events where order_id=$1 and event_type='reject'",
+          [id],
+        ),
+      ).toBe(1);
+      expect(
+        await scalar(
+          "select note from order_events where order_id=$1 and event_type='reject'",
+          [id],
+        ),
+      ).toBe("Stok tidak tersedia");
+    },
+  );
+  it("completes a paid ready order without a typed code, remains admin-only and retry-safe", async () => {
+    await cart();
+    const id = await checkout();
+    await expect(
+      actor(A, (tx) => tx.query("select public.complete_order($1,'')", [id])),
+    ).rejects.toThrow("admin");
+    await expect(
+      actor(ADMIN, (tx) =>
+        tx.query("select public.complete_order($1,'')", [id]),
+      ),
+    ).rejects.toThrow("Urutan");
+    for (const state of ["confirmed", "preparing", "ready"])
+      await command(id, state);
+    await expect(
+      actor(ADMIN, (tx) =>
+        tx.query("select public.complete_order($1,'')", [id]),
+      ),
+    ).rejects.toThrow("Pembayaran");
+    await command(id, "collect_cash");
+    const before = await scalar(
+      "select to_jsonb(p) from payments p where order_id=$1",
+      [id],
+    );
+    await actor(ADMIN, (tx) =>
+      tx.query("select public.complete_order($1,'Diserahkan ke pemilik')", [
+        id,
+      ]),
+    );
+    await actor(ADMIN, (tx) =>
+      tx.query("select public.complete_order($1,'Retry')", [id]),
+    );
+    expect(await scalar("select status from orders where id=$1", [id])).toBe(
+      "completed",
+    );
+    expect(
+      await scalar("select to_jsonb(p) from payments p where order_id=$1", [
+        id,
+      ]),
+    ).toEqual(before);
+    expect(
+      await scalar(
+        "select count(*)::int from audit_logs where operation='completed'",
+        [],
+      ),
+    ).toBe(1);
+    expect(
+      await scalar(
+        "select count(*)::int from pickup_tickets where order_id=$1",
+        [id],
+      ),
+    ).toBe(1);
+  });
+  it("signals only the owner/admin recipients on order, payment, event and proof changes with no private payload", async () => {
+    await cart();
+    const id = await checkout(A, "qris_static");
+    const visibleA = await actor(A, (tx) =>
+      tx.query("select * from order_refresh"),
+    );
+    const visibleB = await actor(B, (tx) =>
+      tx.query("select * from order_refresh"),
+    );
+    const visibleAdmin = await actor(ADMIN, (tx) =>
+      tx.query("select * from order_refresh"),
+    );
+    expect(visibleA.rows).toHaveLength(1);
+    expect(visibleB.rows).toHaveLength(0);
+    expect(visibleAdmin.rows).toHaveLength(1);
+    expect(
+      Object.keys(visibleA.rows[0] as Record<string, unknown>).sort(),
+    ).toEqual(["recipient_id", "version"]);
+    const previous = await scalar<number>(
+      "select version from order_refresh where recipient_id=$1",
+      [ADMIN],
+    );
+    await command(id, "claim_payment", A);
+    expect(
+      Number(
+        await scalar(
+          "select version from order_refresh where recipient_id=$1",
+          [ADMIN],
+        ),
+      ),
+    ).toBeGreaterThan(Number(previous));
+    const afterPayment = await scalar<number>(
+      "select version from order_refresh where recipient_id=$1",
+      [ADMIN],
+    );
+    const path = `${A}/${id}/proof.png`;
+    await db.query(
+      "insert into storage.objects(bucket_id,name) values('payment-proofs',$1)",
+      [path],
+    );
+    await actor(A, (tx) =>
+      tx.query("select public.attach_proof($1,$2)", [id, path]),
+    );
+    expect(
+      Number(
+        await scalar(
+          "select version from order_refresh where recipient_id=$1",
+          [ADMIN],
+        ),
+      ),
+    ).toBeGreaterThan(Number(afterPayment));
+    await expect(
+      actor(A, (tx) => tx.exec("update order_refresh set version=999")),
+    ).rejects.toThrow();
+    await expect(
+      actor(A, (tx) => tx.exec("select public.signal_order_refresh()")),
+    ).rejects.toThrow();
   });
   it("provides global queue counts only to an admin", async () => {
     await cart();
